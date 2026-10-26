@@ -17,7 +17,7 @@ import {
   registerUserAccount,
   synchronizeOfflineQueue,
 } from './src/core/referralEngine.ts';
-import {
+import type {
   InAppNotification,
   Referral,
   SmsFallbackMessage,

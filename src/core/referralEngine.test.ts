@@ -17,15 +17,16 @@ import {
   synchronizeOfflineQueue,
   validateSyntheticDataset,
   validateSyntheticPatientCode,
-} from './referralEngine';
+} from './referralEngine.ts';
 import {
   INITIAL_DEMO_USERS,
   INITIAL_SYNTHETIC_EVENTS,
   INITIAL_SYNTHETIC_NOTIFICATIONS,
   INITIAL_SYNTHETIC_REFERRALS,
   INITIAL_SYNTHETIC_SMS_LOGS,
-} from '../data/syntheticData';
-import { REFERRAL_STATUSES, SyncQueueItem } from '../types/referral';
+} from '../data/syntheticData.ts';
+import { REFERRAL_STATUSES } from '../types/referral.ts';
+import type { SyncQueueItem } from '../types/referral.ts';
 
 test('1. Referral creation with primary and optional sub-category creates valid Referral, initial Referred event, and SMS', () => {
   const result = createReferralRecord({

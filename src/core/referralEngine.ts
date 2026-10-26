@@ -1,21 +1,23 @@
 import QRCode from 'qrcode';
 import {
+  PRIMARY_CATEGORIES_MAP,
+  REFERRAL_STATUSES,
+} from '../types/referral.ts';
+import type {
   DashboardMetrics,
   FacilityType,
   InAppNotification,
-  PRIMARY_CATEGORIES_MAP,
   PrimaryReferralCategory,
   Referral,
   ReferralCategory,
   ReferralPriority,
   ReferralStatus,
-  REFERRAL_STATUSES,
   SmsFallbackMessage,
   StatusEvent,
   SyncQueueItem,
   SyncStatus,
   UserAccount,
-} from '../types/referral';
+} from '../types/referral.ts';
 
 /**
  * Formats primary category and optional sub-category into a unified display label.

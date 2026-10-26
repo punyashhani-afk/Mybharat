@@ -1,10 +1,10 @@
-import {
+import type {
   InAppNotification,
   Referral,
   SmsFallbackMessage,
   StatusEvent,
   UserAccount,
-} from '../types/referral';
+} from '../types/referral.ts';
 
 export const REFERRING_FACILITIES = [
   'PHC Demo North',
