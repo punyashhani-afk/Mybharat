@@ -1,0 +1,77 @@
+{
+  "disclaimer": "Prototype — Not for Clinical Use. All patient information shown is synthetic.",
+  "referrals": [
+    {
+      "referral_id": "XL-1001",
+      "patient_code": "SYN-001",
+      "referring_facility": "PHC Demo North",
+      "receiving_facility": "District Hospital Demo",
+      "referral_category": "Maternal & Child Health",
+      "priority": "Urgent",
+      "created_at": "2026-10-25T08:00:00.000Z",
+      "current_status": "Follow-up",
+      "last_updated_at": "2026-10-25T11:30:00.000Z",
+      "sync_status": "Synced"
+    },
+    {
+      "referral_id": "XL-1002",
+      "patient_code": "SYN-002",
+      "referring_facility": "PHC Demo North",
+      "receiving_facility": "Sub-District Hospital Demo",
+      "referral_category": "Acute Medical / Fever",
+      "priority": "Routine",
+      "created_at": "2026-10-25T09:15:00.000Z",
+      "current_status": "Treated",
+      "last_updated_at": "2026-10-25T11:00:00.000Z",
+      "sync_status": "Synced"
+    },
+    {
+      "referral_id": "XL-1003",
+      "patient_code": "SYN-003",
+      "referring_facility": "CHC Demo East",
+      "receiving_facility": "District Hospital Demo",
+      "referral_category": "Trauma & Surgical",
+      "priority": "Emergency",
+      "created_at": "2026-10-25T10:00:00.000Z",
+      "current_status": "Seen",
+      "last_updated_at": "2026-10-25T10:42:00.000Z",
+      "sync_status": "Synced"
+    },
+    {
+      "referral_id": "XL-1004",
+      "patient_code": "SYN-004",
+      "referring_facility": "PHC Demo South",
+      "receiving_facility": "CHC Demo Central",
+      "referral_category": "Non-Communicable Disease (NCD)",
+      "priority": "Routine",
+      "created_at": "2026-10-25T12:00:00.000Z",
+      "current_status": "Arrived",
+      "last_updated_at": "2026-10-25T12:50:00.000Z",
+      "sync_status": "Synced"
+    },
+    {
+      "referral_id": "XL-1005",
+      "patient_code": "SYN-005",
+      "referring_facility": "PHC Demo North",
+      "receiving_facility": "District Hospital Demo",
+      "referral_category": "Pediatric Care",
+      "priority": "Urgent",
+      "created_at": "2026-10-25T13:20:00.000Z",
+      "current_status": "Referred",
+      "last_updated_at": "2026-10-25T13:20:00.000Z",
+      "sync_status": "Synced"
+    },
+    {
+      "referral_id": "XL-1006",
+      "patient_code": "SYN-006",
+      "referring_facility": "PHC Demo Valley",
+      "receiving_facility": "Sub-District Hospital Demo",
+      "referral_category": "Ophthalmology / ENT",
+      "priority": "Routine",
+      "created_at": "2026-10-25T14:00:00.000Z",
+      "current_status": "Back-referred",
+      "last_updated_at": "2026-10-25T17:10:00.000Z",
+      "sync_status": "Synced"
+    }
+  ]
+}

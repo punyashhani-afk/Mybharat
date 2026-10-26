@@ -1,0 +1,6 @@
+{
+  "name": "Xareloop — Clinical Referral-Feedback System",
+  "description": "Low-bandwidth, offline-first clinical referral-feedback system closing the visibility gap between referring PHC/CHC clinics and receiving hospitals using synthetic patient data.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
