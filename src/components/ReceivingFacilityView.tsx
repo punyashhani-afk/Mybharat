@@ -1,36 +1,34 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
-  ArrowRight,
   CheckCircle2,
   CloudOff,
-  MessageSquare,
+  Lock,
   QrCode,
   Search,
 } from 'lucide-react';
 import {
   Referral,
-  REFERRAL_STATUSES,
   ReferralStatus,
+  RolePermissions,
   SmsFallbackMessage,
   StatusEvent,
 } from '../types/referral';
-import { RECEIVING_FACILITIES } from '../data/syntheticData';
 import {
-  buildReferralQrPayload,
   getReferralTimeline,
   lookupReferralById,
+  parseReferralLookupInput,
 } from '../core/referralEngine';
-import {
-  formatShortTimestamp,
-  ReferralTimelineCard,
-} from './ReferralTimelineCard';
+import { ReferralTimelineCard } from './ReferralTimelineCard';
+import { QrCameraScannerModal } from './QrCameraScannerModal';
 
 interface ReceivingFacilityViewProps {
+  mode: 'scan_update' | 'search';
   referrals: Referral[];
   events: StatusEvent[];
   initialLookupId: string;
-  defaultReceivingFacility: string;
+  permissions: RolePermissions;
+  onSwitchToReceivingStaff?: () => void;
   onUpdateStatus: (
     referralId: string,
     facilityId: string,
@@ -40,14 +38,24 @@ interface ReceivingFacilityViewProps {
     event: StatusEvent;
     sms: SmsFallbackMessage;
   };
-  onViewQr: (referral: Referral) => void;
+  onViewQr?: (referral: Referral) => void;
 }
 
+const ONE_TAP_STATUSES: { label: string; value: ReferralStatus }[] = [
+  { label: 'ARRIVED', value: 'Arrived' },
+  { label: 'SEEN', value: 'Seen' },
+  { label: 'TREATED', value: 'Treated' },
+  { label: 'FOLLOW-UP', value: 'Follow-up' },
+  { label: 'BACK-REFERRED', value: 'Back-referred' },
+];
+
 export const ReceivingFacilityView: React.FC<ReceivingFacilityViewProps> = ({
+  mode,
   referrals,
   events,
   initialLookupId,
-  defaultReceivingFacility,
+  permissions,
+  onSwitchToReceivingStaff,
   onUpdateStatus,
   onViewQr,
 }) => {
@@ -55,20 +63,12 @@ export const ReceivingFacilityView: React.FC<ReceivingFacilityViewProps> = ({
   const [searchedQuery, setSearchedQuery] = useState(
     initialLookupId || 'XL-1001'
   );
-  const [activeFacility, setActiveFacility] = useState<string>(
-    RECEIVING_FACILITIES.includes(
-      defaultReceivingFacility as (typeof RECEIVING_FACILITIES)[number]
-    )
-      ? defaultReceivingFacility
-      : RECEIVING_FACILITIES[0]
+  const [isCameraScannerOpen, setIsCameraScannerOpen] = useState(false);
+  const [lastScannedBanner, setLastScannedBanner] = useState<string | null>(
+    null
   );
-  const [showQrScannerModal, setShowQrScannerModal] = useState(false);
-  const [qrRawPayloadInput, setQrRawPayloadInput] = useState('');
-  const [lastUpdateFeedback, setLastUpdateFeedback] = useState<{
+  const [lastUpdatedStatus, setLastUpdatedStatus] = useState<{
     status: ReferralStatus;
-    facility: string;
-    timestamp: string;
-    smsText: string;
     syncStatus: string;
   } | null>(null);
 
@@ -82,31 +82,32 @@ export const ReceivingFacilityView: React.FC<ReceivingFacilityViewProps> = ({
   const lookupResult = lookupReferralById(referrals, searchedQuery);
   const matchedReferral = lookupResult.referral;
 
-  // Keep activeFacility aligned with the matched referral's receiving facility when a new referral is opened
-  useEffect(() => {
-    if (matchedReferral?.receiving_facility) {
-      setActiveFacility(matchedReferral.receiving_facility);
-    }
-  }, [matchedReferral?.referral_id]);
-
   const handleLookupSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setLastUpdateFeedback(null);
+    setLastUpdatedStatus(null);
+    setLastScannedBanner(null);
     setSearchedQuery(lookupInput);
   };
 
+  // Handle decoded QR result from live camera scanner
+  const handleQrScanSuccess = (decodedQrValue: string) => {
+    setIsCameraScannerOpen(false);
+    setLastUpdatedStatus(null);
+    const parsedShortId = parseReferralLookupInput(decodedQrValue);
+    setLookupInput(parsedShortId || decodedQrValue);
+    setSearchedQuery(decodedQrValue);
+    setLastScannedBanner(`Scanned QR: ${parsedShortId || decodedQrValue}`);
+  };
+
   const handleOneTapStatus = (status: ReferralStatus) => {
-    if (!matchedReferral) return;
+    if (!matchedReferral || !permissions.canUpdateReferralStatus) return;
     const res = onUpdateStatus(
       matchedReferral.referral_id,
-      activeFacility,
+      matchedReferral.receiving_facility,
       status
     );
-    setLastUpdateFeedback({
+    setLastUpdatedStatus({
       status: res.event.status,
-      facility: res.event.facility_id,
-      timestamp: res.event.timestamp,
-      smsText: res.sms.message,
       syncStatus: res.event.sync_status,
     });
   };
@@ -116,336 +117,239 @@ export const ReceivingFacilityView: React.FC<ReceivingFacilityViewProps> = ({
     : [];
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-            Receiving Facility Lookup & One-Tap Status Update
-          </h1>
-          <p className="mt-1 text-sm text-slate-600">
-            Scan a referral QR code or enter the short referral ID to view
-            referring PHC/CHC details and update status with one tap.
-          </p>
-        </div>
+    <div className="mx-auto max-w-xl space-y-5">
+      {/* Live Camera QR Code Scanner Screen */}
+      <QrCameraScannerModal
+        isOpen={isCameraScannerOpen}
+        onClose={() => setIsCameraScannerOpen(false)}
+        onScanSuccess={handleQrScanSuccess}
+      />
 
-        <div className="flex items-center gap-2">
-          <label
-            htmlFor="active-receiving-facility"
-            className="text-xs font-semibold text-slate-700"
-          >
-            Acting Facility:
-          </label>
-          <select
-            id="active-receiving-facility"
-            value={activeFacility}
-            onChange={(e) => setActiveFacility(e.target.value)}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-900 focus:border-teal-700 focus:outline-none min-h-[40px]"
-          >
-            {RECEIVING_FACILITIES.map((fac) => (
-              <option key={fac} value={fac}>
-                {fac}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Search / QR Lookup Bar */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5">
-        <form
-          onSubmit={handleLookupSubmit}
-          className="flex flex-wrap items-center gap-3"
-        >
-          <div className="relative flex-1 min-w-[220px]">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              id="referral-lookup-input"
-              type="text"
-              value={lookupInput}
-              onChange={(e) => setLookupInput(e.target.value)}
-              placeholder="Enter short referral ID (e.g. XL-1001, XL-1005)..."
-              aria-label="Short referral ID lookup"
-              className="w-full rounded-lg border border-slate-300 bg-white pl-10 pr-4 py-2.5 font-mono text-sm font-semibold text-slate-900 focus:border-teal-700 focus:outline-none min-h-[48px]"
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 transition-colors min-h-[48px] whitespace-nowrap shrink-0"
-          >
-            <span>Lookup Referral</span>
-          </button>
-
+      {mode === 'scan_update' ? (
+        /* SCAN / UPDATE: Distinctive Primary SCAN QR Action and ENTER REFERRAL ID below it */
+        <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-xs space-y-4">
           <button
             type="button"
-            onClick={() => setShowQrScannerModal((prev) => !prev)}
-            className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 hover:bg-slate-50 transition-colors min-h-[48px] whitespace-nowrap shrink-0"
+            data-testid="open-qr-scanner-btn"
+            onClick={() => setIsCameraScannerOpen(true)}
+            className="w-full flex items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-[#0B5E5E] via-[#0D6E6E] to-[#0F766E] px-6 py-4 text-lg font-bold tracking-wide text-white shadow-sm ring-1 ring-teal-950/15 hover:from-[#094D4D] hover:to-[#0D655E] transition-all min-h-[60px]"
           >
-            <QrCode className="w-4 h-4 text-teal-700" />
-            <span>Scan QR Code</span>
+            <QrCode className="w-6 h-6" />
+            <span>SCAN QR</span>
           </button>
-        </form>
 
-        {/* Quick Preset IDs for fast testing */}
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-          <span>Quick lookup IDs:</span>
-          {referrals.slice(0, 6).map((r) => (
-            <button
-              key={r.referral_id}
-              type="button"
-              aria-label={`Lookup referral ${r.referral_id}`}
-              onClick={() => {
-                setLookupInput(r.referral_id);
-                setSearchedQuery(r.referral_id);
-                setLastUpdateFeedback(null);
-              }}
-              className={`font-mono px-2.5 py-1 rounded-md border transition-colors min-h-[32px] ${
-                searchedQuery.toUpperCase() === r.referral_id
-                  ? 'border-teal-700 bg-teal-50 text-teal-900 font-bold'
-                  : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-              }`}
+          {lastScannedBanner && (
+            <div
+              role="status"
+              data-testid="qr-scanned-result-banner"
+              className="flex items-center justify-between rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-2 text-xs font-bold text-teal-900"
             >
-              {r.referral_id}
-            </button>
-          ))}
-        </div>
+              <span>{lastScannedBanner}</span>
+              <CheckCircle2 className="w-4 h-4 text-teal-700 shrink-0" />
+            </div>
+          )}
 
-        {/* Simulated / Payload QR Scanner Drawer */}
-        {showQrScannerModal && (
-          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold text-slate-900">
-                QR Code Scanner & Payload Decoder
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowQrScannerModal(false)}
-                className="text-xs font-medium text-slate-600 hover:text-slate-900"
-              >
-                Close Scanner
-              </button>
-            </div>
-            <p className="text-xs text-slate-600">
-              Simulate scanning a patient referral slip QR code or paste raw
-              Xareloop QR JSON payload:
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {referrals.slice(0, 4).map((r) => (
-                <button
-                  key={r.referral_id}
-                  type="button"
-                  onClick={() => {
-                    const payload = buildReferralQrPayload(r);
-                    setLookupInput(r.referral_id);
-                    setSearchedQuery(payload);
-                    setShowQrScannerModal(false);
-                    setLastUpdateFeedback(null);
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-teal-700 bg-white px-3 py-2 text-xs font-semibold text-teal-900 hover:bg-teal-50 min-h-[40px]"
-                >
-                  <QrCode className="w-3.5 h-3.5" />
-                  <span>Scan {r.referral_id} Slip</span>
-                </button>
-              ))}
-            </div>
+          <form onSubmit={handleLookupSubmit} className="space-y-2 pt-1">
+            <label
+              htmlFor="referral-lookup-input"
+              className="block text-[11px] font-bold uppercase tracking-wider text-slate-500"
+            >
+              ENTER REFERRAL ID
+            </label>
             <div className="flex gap-2">
               <input
+                id="referral-lookup-input"
                 type="text"
-                value={qrRawPayloadInput}
-                onChange={(e) => setQrRawPayloadInput(e.target.value)}
-                placeholder='{"protocol":"XARELOOP_V1","referral_id":"XL-1001",...}'
-                aria-label="Paste QR JSON payload"
-                className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 min-h-[40px]"
+                value={lookupInput}
+                onChange={(e) => setLookupInput(e.target.value)}
+                placeholder="e.g. XL-1001"
+                aria-label="Enter Referral ID"
+                className="flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 font-mono text-base font-bold text-slate-900 focus:border-teal-700 focus:outline-none min-h-[48px]"
               />
               <button
-                type="button"
-                onClick={() => {
-                  if (qrRawPayloadInput.trim()) {
-                    setSearchedQuery(qrRawPayloadInput.trim());
-                    setShowQrScannerModal(false);
-                    setLastUpdateFeedback(null);
-                  }
-                }}
-                className="rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 min-h-[40px]"
+                type="submit"
+                className="rounded-xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800 transition-colors min-h-[48px]"
               >
-                Decode QR
+                Open
               </button>
             </div>
-          </div>
-        )}
-      </div>
+          </form>
+        </div>
+      ) : (
+        /* SEARCH: Short referral ID lookup */
+        <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-xs">
+          <form onSubmit={handleLookupSubmit} className="space-y-2">
+            <label
+              htmlFor="search-referral-id-input"
+              className="block text-[11px] font-bold uppercase tracking-wider text-slate-500"
+            >
+              Enter Referral ID
+            </label>
+            <div className="flex gap-2">
+              <input
+                id="search-referral-id-input"
+                type="text"
+                value={lookupInput}
+                onChange={(e) => setLookupInput(e.target.value)}
+                placeholder="e.g. XL-1001"
+                aria-label="Search by short referral ID"
+                className="flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 font-mono text-base font-bold text-slate-900 focus:border-teal-700 focus:outline-none min-h-[48px]"
+              />
+              <button
+                type="submit"
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#0B5E5E] to-[#0F766E] px-5 py-3 text-sm font-bold text-white shadow-xs hover:from-[#094D4D] hover:to-[#0D655E] transition-all min-h-[48px]"
+              >
+                <Search className="w-4 h-4" />
+                <span>Search</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
-      {/* Invalid ID / Referral Not Found State */}
+      {/* Not Found Message */}
       {!lookupResult.found || !matchedReferral ? (
         <div
           role="alert"
           data-testid="referral-not-found-alert"
-          className="rounded-xl border border-red-200 bg-red-50 p-6 text-center"
+          className="rounded-2xl border border-red-200 bg-red-50 p-6 text-center"
         >
-          <AlertCircle className="w-8 h-8 text-red-700 mx-auto" />
-          <h2 className="mt-2 text-lg font-bold text-red-900">
+          <AlertCircle className="w-7 h-7 text-red-700 mx-auto" />
+          <div className="mt-2 text-base font-bold text-red-900">
             Referral not found
-          </h2>
-          <p className="mt-1 text-xs text-red-800">
-            No synthetic referral record matches{' '}
-            <span className="font-mono font-bold">
-              “{searchedQuery || lookupInput}”
-            </span>
-            . Verify the short ID (e.g., XL-1001) or scan the patient referral
-            QR slip.
-          </p>
+          </div>
         </div>
       ) : (
-        /* Valid Referral Found: One-Tap Status Update + Timeline */
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left 7 Columns: Referral Info & Large One-Tap Status Buttons */}
-          <div className="lg:col-span-7 space-y-5">
-            <div className="rounded-xl border border-slate-200 bg-white p-6">
-              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-4">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                    <span className="font-mono text-base font-bold text-slate-900">
-                      {matchedReferral.referral_id}
-                    </span>
-                    <span aria-hidden="true">·</span>
-                    <span className="font-mono font-semibold text-slate-800">
-                      Patient {matchedReferral.patient_code}
-                    </span>
-                    <span aria-hidden="true">·</span>
-                    <span
-                      className={
-                        matchedReferral.priority === 'Emergency'
-                          ? 'font-bold text-red-700'
-                          : matchedReferral.priority === 'Urgent'
-                            ? 'font-bold text-amber-700'
-                            : 'font-medium text-slate-700'
-                      }
-                    >
-                      {matchedReferral.priority} Priority
-                    </span>
-                  </div>
-                  <h2 className="mt-1.5 text-lg font-bold text-slate-900">
-                    {matchedReferral.referral_category}
-                  </h2>
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
-                    <span>Referred from:</span>
-                    <strong className="text-slate-900">
-                      {matchedReferral.referring_facility}
-                    </strong>
-                    <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
-                    <span>To:</span>
-                    <strong className="text-slate-900">
-                      {matchedReferral.receiving_facility}
-                    </strong>
-                  </div>
+        <div className="space-y-5">
+          {/* Minimal Referral Information Card:
+              - Patient Code
+              - Referring Facility
+              - Receiving Facility
+              - Current Status */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="text-xs text-slate-500">Patient Code</div>
+                <div className="mt-0.5 font-mono text-lg font-bold text-slate-900">
+                  {matchedReferral.patient_code}
                 </div>
+              </div>
 
-                <div className="text-right">
-                  <div className="text-xs text-slate-500">Current Status</div>
+              <div>
+                <div className="text-xs text-slate-500">Current Status</div>
+                <div
+                  data-testid="receiving-current-status"
+                  className="mt-0.5 text-lg font-bold text-teal-800"
+                >
+                  {matchedReferral.current_status}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs text-slate-500">Referring Facility</div>
+                <div className="mt-0.5 text-sm font-semibold text-slate-900">
+                  {matchedReferral.referring_facility}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs text-slate-500">Receiving Facility</div>
+                <div className="mt-0.5 text-sm font-semibold text-slate-900">
+                  {matchedReferral.receiving_facility}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {mode === 'scan_update' ? (
+            permissions.canUpdateReferralStatus ? (
+              /* Large One-Tap Status Buttons for Receiving Staff:
+                 ARRIVED, SEEN, TREATED, FOLLOW-UP, BACK-REFERRED */
+              <div className="space-y-3">
+                {lastUpdatedStatus && (
                   <div
-                    data-testid="receiving-current-status"
-                    className="text-base font-bold text-teal-800"
+                    role="status"
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm font-bold text-teal-950"
                   >
-                    {matchedReferral.current_status}
-                  </div>
-                  <div className="mt-0.5 text-xs">
-                    {matchedReferral.sync_status === 'Saved offline' ? (
-                      <span className="inline-flex items-center gap-1 font-medium text-amber-700">
-                        <CloudOff className="w-3.5 h-3.5" />
+                    <span>
+                      Marked {lastUpdatedStatus.status} · Notification sent to
+                      referring dashboard
+                    </span>
+                    {lastUpdatedStatus.syncStatus === 'Saved offline' ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-800">
+                        <CloudOff className="w-4 h-4" />
                         Saved offline
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 font-medium text-emerald-700">
-                        <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-800">
+                        <CheckCircle2 className="w-4 h-4" />
                         Synced
                       </span>
                     )}
                   </div>
-                </div>
-              </div>
+                )}
 
-              {/* One-Tap Status Update Grid (Large Frontline Healthcare Buttons) */}
-              <div className="mt-5">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-bold text-slate-900">
-                    One-Tap Referral Status Update
-                  </h3>
-                  <span className="text-xs text-slate-500">
-                    Recording as: <strong>{activeFacility}</strong>
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {REFERRAL_STATUSES.map((status) => {
-                    const isCurrent = matchedReferral.current_status === status;
+                <div className="grid grid-cols-1 gap-2.5">
+                  {ONE_TAP_STATUSES.map((btn) => {
+                    const isCurrent =
+                      matchedReferral.current_status === btn.value;
                     return (
                       <button
-                        key={status}
+                        key={btn.value}
                         type="button"
-                        data-testid={`status-btn-${status.toLowerCase()}`}
-                        aria-label={`Mark status ${status}`}
-                        onClick={() => handleOneTapStatus(status)}
+                        data-testid={`status-btn-${btn.value.toLowerCase()}`}
+                        onClick={() => handleOneTapStatus(btn.value)}
                         aria-pressed={isCurrent}
-                        className={`flex flex-col items-start justify-between rounded-xl border p-4 text-left transition-colors min-h-[72px] ${
+                        className={`w-full rounded-xl border px-5 py-4 text-base font-bold tracking-wide transition-colors min-h-[56px] ${
                           isCurrent
                             ? 'border-slate-900 bg-slate-900 text-white'
-                            : 'border-slate-300 bg-white text-slate-900 hover:border-teal-700 hover:bg-teal-50/40'
+                            : 'border-slate-300 bg-white text-slate-900 hover:border-teal-700 hover:bg-teal-50'
                         }`}
                       >
-                        <span
-                          className={`text-sm font-bold ${
-                            isCurrent ? 'text-white' : 'text-slate-900'
-                          }`}
-                        >
-                          {status}
-                        </span>
-                        <span
-                          className={`text-[11px] mt-1 ${
-                            isCurrent ? 'text-slate-300' : 'text-slate-500'
-                          }`}
-                        >
-                          {isCurrent ? 'Current active state' : 'Tap to record'}
-                        </span>
+                        {btn.label}
                       </button>
                     );
                   })}
                 </div>
               </div>
-
-              {/* Immediate Confirmation & Simulated SMS Feedback */}
-              {lastUpdateFeedback && (
-                <div
-                  role="status"
-                  className="mt-5 rounded-xl border border-teal-200 bg-teal-50/70 p-4 space-y-2"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-teal-950">
-                    <span>
-                      Status updated to “{lastUpdateFeedback.status}” at{' '}
-                      {lastUpdateFeedback.facility}
-                    </span>
-                    <span className="font-mono tabular-nums">
-                      {lastUpdateFeedback.syncStatus} ·{' '}
-                      {formatShortTimestamp(lastUpdateFeedback.timestamp)}
-                    </span>
-                  </div>
-                  <div className="flex items-start gap-2 text-xs text-slate-700 font-mono bg-white rounded-lg border border-teal-200/80 p-2.5">
-                    <MessageSquare className="w-4 h-4 text-teal-700 shrink-0 mt-0.5" />
-                    <span>{lastUpdateFeedback.smsText}</span>
-                  </div>
+            ) : (
+              /* Role Permission Guard when signed in as Referring Staff */
+              <div
+                role="region"
+                aria-label="Role Permission Notice"
+                data-testid="update-status-role-guard"
+                className="rounded-2xl border border-amber-300 bg-amber-50 p-5 text-center space-y-3"
+              >
+                <Lock className="w-6 h-6 text-amber-800 mx-auto" />
+                <div className="text-sm font-bold text-amber-950">
+                  Receiving Staff Role Required to Update Status
                 </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right 5 Columns: Live Chronological Timeline */}
-          <div className="lg:col-span-5">
+                <p className="text-xs text-amber-900">
+                  You are currently signed in as{' '}
+                  <strong>Referring Staff</strong> (can create referrals and
+                  view dashboards). Switch to <strong>Receiving Staff</strong>{' '}
+                  to record status updates.
+                </p>
+                {onSwitchToReceivingStaff && (
+                  <button
+                    type="button"
+                    data-testid="switch-to-receiving-staff-btn"
+                    onClick={onSwitchToReceivingStaff}
+                    className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 transition-colors min-h-[42px]"
+                  >
+                    Switch to Receiving Staff
+                  </button>
+                )}
+              </div>
+            )
+          ) : (
+            /* Search Mode: Show Simple Vertical Timeline */
             <ReferralTimelineCard
               referral={matchedReferral}
               events={timelineEvents}
               onViewQr={onViewQr}
-              hideReceivingAction
             />
-          </div>
+          )}
         </div>
       )}
     </div>

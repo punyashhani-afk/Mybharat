@@ -1,4 +1,5 @@
-import {
+import type {
+  CloudSyncLogEntry,
   InAppNotification,
   Referral,
   SmsFallbackMessage,
@@ -7,6 +8,7 @@ import {
   UserAccount,
 } from '../types/referral';
 import {
+  INITIAL_CLOUD_SYNC_LOGS,
   INITIAL_DEMO_USERS,
   INITIAL_SYNTHETIC_EVENTS,
   INITIAL_SYNTHETIC_NOTIFICATIONS,
@@ -25,6 +27,8 @@ export interface LocalDbSnapshot {
   notifications: InAppNotification[];
   sync_queue: SyncQueueItem[];
   users: UserAccount[];
+  cloud_revision?: number;
+  cloud_logs?: CloudSyncLogEntry[];
   last_synced_at: string;
 }
 
@@ -36,6 +40,8 @@ function getDefaultSnapshot(): LocalDbSnapshot {
     notifications: [...INITIAL_SYNTHETIC_NOTIFICATIONS],
     sync_queue: [],
     users: [...INITIAL_DEMO_USERS],
+    cloud_revision: 1,
+    cloud_logs: [...INITIAL_CLOUD_SYNC_LOGS],
     last_synced_at: new Date().toISOString(),
   };
 }
@@ -88,7 +94,9 @@ export async function loadLocalSnapshot(): Promise<LocalDbSnapshot> {
   }
 }
 
-export async function saveLocalSnapshot(snapshot: LocalDbSnapshot): Promise<void> {
+export async function saveLocalSnapshot(
+  snapshot: LocalDbSnapshot
+): Promise<void> {
   try {
     localStorage.setItem(DB_NAME, JSON.stringify(snapshot));
   } catch {

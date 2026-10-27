@@ -8,6 +8,9 @@
 @layer base {
   body {
     font-family: var(--font-sans);
+    background-color: #f8fafc;
+    color: #0f172a;
+    -webkit-font-smoothing: antialiased;
   }
 }
 

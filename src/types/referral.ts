@@ -86,10 +86,13 @@ export interface Referral {
   primary_category: string;
   sub_category?: string;
   referral_category: string;
+  custom_note?: string;
+  is_custom?: boolean;
   priority: ReferralPriority;
   created_at: string;
   current_status: ReferralStatus;
   last_updated_at: string;
+  last_viewed_by_referring_at?: string;
   sync_status?: SyncStatus;
 }
 
@@ -127,6 +130,16 @@ export interface InAppNotification {
 
 export type FacilityType = 'referring' | 'receiving';
 
+export type StaffRole = 'Referring Staff' | 'Receiving Staff';
+
+export interface RolePermissions {
+  role: StaffRole;
+  canCreateReferrals: boolean;
+  canViewDashboard: boolean;
+  canUpdateReferralStatus: boolean;
+  canSearchReferrals: boolean;
+}
+
 export interface UserAccount {
   user_id: string;
   username: string;
@@ -149,6 +162,14 @@ export interface SyncQueueItem {
   queued_at: string;
 }
 
+export interface CloudSyncLogEntry {
+  sync_id: string;
+  revision: number;
+  action: 'CLOUD_PUSH' | 'CLOUD_PULL' | 'REMOTE_UPDATE' | 'CUSTOM_REFERRAL';
+  summary: string;
+  timestamp: string;
+}
+
 export interface DashboardMetrics {
   total_referrals: number;
   confirmed_arrivals: number;
@@ -163,5 +184,7 @@ export interface XareloopStateSnapshot {
   events: StatusEvent[];
   sms_logs: SmsFallbackMessage[];
   notifications: InAppNotification[];
+  cloud_revision?: number;
+  cloud_logs?: CloudSyncLogEntry[];
   last_synced_at: string;
 }

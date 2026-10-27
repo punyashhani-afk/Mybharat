@@ -1,4 +1,5 @@
 import type {
+  CloudSyncLogEntry,
   InAppNotification,
   Referral,
   SmsFallbackMessage,
@@ -91,6 +92,8 @@ export const INITIAL_SYNTHETIC_REFERRALS: Referral[] = [
     created_at: '2026-10-25T08:00:00.000Z',
     current_status: 'Follow-up',
     last_updated_at: '2026-10-25T11:30:00.000Z',
+    // Viewed earlier than last_updated_at so it highlights as having a new status update
+    last_viewed_by_referring_at: '2026-10-25T08:05:00.000Z',
     sync_status: 'Synced',
   },
   {
@@ -105,6 +108,8 @@ export const INITIAL_SYNTHETIC_REFERRALS: Referral[] = [
     created_at: '2026-10-25T09:15:00.000Z',
     current_status: 'Treated',
     last_updated_at: '2026-10-25T11:00:00.000Z',
+    // Viewed earlier than last_updated_at so it highlights as having a new status update ('Treated')
+    last_viewed_by_referring_at: '2026-10-25T09:20:00.000Z',
     sync_status: 'Synced',
   },
   {
@@ -119,6 +124,8 @@ export const INITIAL_SYNTHETIC_REFERRALS: Referral[] = [
     created_at: '2026-10-25T10:00:00.000Z',
     current_status: 'Seen',
     last_updated_at: '2026-10-25T10:42:00.000Z',
+    // Viewed earlier than last_updated_at so it highlights as having a new status update ('Seen')
+    last_viewed_by_referring_at: '2026-10-25T10:05:00.000Z',
     sync_status: 'Synced',
   },
   {
@@ -133,6 +140,8 @@ export const INITIAL_SYNTHETIC_REFERRALS: Referral[] = [
     created_at: '2026-10-25T12:00:00.000Z',
     current_status: 'Arrived',
     last_updated_at: '2026-10-25T12:50:00.000Z',
+    // Already viewed after last update
+    last_viewed_by_referring_at: '2026-10-25T13:00:00.000Z',
     sync_status: 'Synced',
   },
   {
@@ -147,6 +156,7 @@ export const INITIAL_SYNTHETIC_REFERRALS: Referral[] = [
     created_at: '2026-10-25T13:20:00.000Z',
     current_status: 'Referred',
     last_updated_at: '2026-10-25T13:20:00.000Z',
+    last_viewed_by_referring_at: '2026-10-25T13:20:00.000Z',
     sync_status: 'Synced',
   },
   {
@@ -161,6 +171,7 @@ export const INITIAL_SYNTHETIC_REFERRALS: Referral[] = [
     created_at: '2026-10-25T14:00:00.000Z',
     current_status: 'Back-referred',
     last_updated_at: '2026-10-25T17:10:00.000Z',
+    last_viewed_by_referring_at: '2026-10-25T17:20:00.000Z',
     sync_status: 'Synced',
   },
 ];
@@ -448,5 +459,15 @@ export const INITIAL_SYNTHETIC_NOTIFICATIONS: InAppNotification[] = [
       'CHC Demo Central updated SYN-004 (Acute Medical / Fever — Severe Dehydration) to Arrived.',
     timestamp: '2026-10-25T12:50:00.000Z',
     read: true,
+  },
+];
+
+export const INITIAL_CLOUD_SYNC_LOGS: CloudSyncLogEntry[] = [
+  {
+    sync_id: 'CLD-1001',
+    revision: 1,
+    action: 'CLOUD_PUSH',
+    summary: 'Initial synthetic referral dataset (XL-1001 through XL-1006) synchronized with Cloud Hub.',
+    timestamp: '2026-10-25T17:15:00.000Z',
   },
 ];

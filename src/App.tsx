@@ -4,14 +4,9 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
+import { ClipboardList, QrCode, Search, UserCheck } from 'lucide-react';
 import {
-  Activity,
-  BarChart3,
-  ClipboardList,
-  PlusCircle,
-  QrCode,
-} from 'lucide-react';
-import {
+  CloudSyncLogEntry,
   FacilityType,
   InAppNotification,
   Referral,
@@ -23,6 +18,7 @@ import {
   UserAccount,
 } from './types/referral';
 import {
+  INITIAL_CLOUD_SYNC_LOGS,
   INITIAL_DEMO_USERS,
   INITIAL_SYNTHETIC_EVENTS,
   INITIAL_SYNTHETIC_NOTIFICATIONS,
@@ -34,30 +30,26 @@ import {
   authenticateUser,
   createReferralRecord,
   enqueueOfflineItem,
+  getRolePermissions,
+  getStaffRole,
+  markReferralTimelineViewed,
   registerUserAccount,
   synchronizeOfflineQueue,
 } from './core/referralEngine';
-import {
-  clearAndResetLocalSnapshot,
-  loadLocalSnapshot,
-  saveLocalSnapshot,
-} from './services/indexedDb';
-import {
-  fetchServerState,
-  postResetServerState,
-  postSyncBatchToServer,
-} from './services/api';
+import { loadLocalSnapshot, saveLocalSnapshot } from './services/indexedDb';
+import { fetchServerState, postSyncBatchToServer } from './services/api';
 import { OfflineSyncBar } from './components/OfflineSyncBar';
 import { ReferringDashboard } from './components/ReferringDashboard';
 import { CreateReferralView } from './components/CreateReferralView';
 import { ReceivingFacilityView } from './components/ReceivingFacilityView';
-import { MetricsAndSmsView } from './components/MetricsAndSmsView';
 import { AuthModal } from './components/AuthModal';
 
-export type ActiveTab = 'dashboard' | 'create' | 'receiving' | 'metrics';
+export type PrimarySection = 'referrals' | 'scan_update' | 'search';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [activeSection, setActiveSection] =
+    useState<PrimarySection>('referrals');
+  const [isCreatingReferral, setIsCreatingReferral] = useState<boolean>(false);
 
   const [referrals, setReferrals] = useState<Referral[]>(
     INITIAL_SYNTHETIC_REFERRALS
@@ -74,6 +66,11 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<UserAccount>(
     INITIAL_DEMO_USERS[0]
   );
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [cloudRevision, setCloudRevision] = useState<number>(1);
+  const [cloudLogs, setCloudLogs] = useState<CloudSyncLogEntry[]>(
+    INITIAL_CLOUD_SYNC_LOGS
+  );
 
   const [selectedReferralId, setSelectedReferralId] =
     useState<string>('XL-1001');
@@ -86,13 +83,10 @@ export default function App() {
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
   const [simulatedOffline, setSimulatedOffline] = useState<boolean>(false);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [lastSyncMessage, setLastSyncMessage] = useState<string | null>(
-    'All referral events synced'
-  );
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
 
   const isEffectiveOffline = !browserOnline || simulatedOffline;
+  const permissions = getRolePermissions(currentUser);
+  const staffRoleLabel = getStaffRole(currentUser);
 
   // Persist helper to IndexedDB + BroadcastChannel
   const persistState = useCallback(
@@ -103,6 +97,8 @@ export default function App() {
       notifications: InAppNotification[];
       sync_queue: SyncQueueItem[];
       users: UserAccount[];
+      cloud_revision?: number;
+      cloud_logs?: CloudSyncLogEntry[];
     }) => {
       await saveLocalSnapshot({
         ...next,
@@ -134,6 +130,8 @@ export default function App() {
       if (local.users && local.users.length > 0) {
         setUsers(local.users);
       }
+      if (local.cloud_revision) setCloudRevision(local.cloud_revision);
+      if (local.cloud_logs) setCloudLogs(local.cloud_logs);
 
       if (navigator.onLine) {
         try {
@@ -151,6 +149,8 @@ export default function App() {
           setSmsLogs(synced.sms_logs);
           setNotifications(synced.notifications);
           setUsers(synced.users);
+          setCloudRevision(synced.cloud_revision || 1);
+          setCloudLogs(synced.cloud_logs || INITIAL_CLOUD_SYNC_LOGS);
           setSyncQueue([]);
           await saveLocalSnapshot({
             referrals: synced.referrals,
@@ -159,6 +159,8 @@ export default function App() {
             notifications: synced.notifications,
             sync_queue: [],
             users: synced.users,
+            cloud_revision: synced.cloud_revision,
+            cloud_logs: synced.cloud_logs,
             last_synced_at: synced.server_time,
           });
         } catch {
@@ -172,7 +174,7 @@ export default function App() {
     };
   }, []);
 
-  // Listen for browser online/offline events & BroadcastChannel updates across tabs
+  // Listen for browser online/offline events, BroadcastChannel updates, and Cloud SSE stream
   useEffect(() => {
     const onOnline = () => setBrowserOnline(true);
     const onOffline = () => setBrowserOnline(false);
@@ -192,6 +194,8 @@ export default function App() {
             setNotifications(p.notifications);
             setSyncQueue(p.sync_queue);
             setUsers(p.users);
+            if (p.cloud_revision) setCloudRevision(p.cloud_revision);
+            if (p.cloud_logs) setCloudLogs(p.cloud_logs);
           }
         };
       }
@@ -199,86 +203,105 @@ export default function App() {
       // Ignore
     }
 
+    let eventSource: EventSource | null = null;
+    if (!isEffectiveOffline && typeof EventSource !== 'undefined') {
+      try {
+        eventSource = new EventSource('/api/cloud/stream');
+        eventSource.addEventListener('cloud_update', (evt) => {
+          try {
+            const data = JSON.parse((evt as MessageEvent).data);
+            if (data && Array.isArray(data.referrals)) {
+              setReferrals(data.referrals);
+              setEvents(data.events);
+              setSmsLogs(data.sms_logs);
+              setNotifications(data.notifications);
+              if (data.cloud_revision) setCloudRevision(data.cloud_revision);
+              if (data.cloud_logs) setCloudLogs(data.cloud_logs);
+            }
+          } catch {
+            // Ignore malformed SSE payload
+          }
+        });
+      } catch {
+        // Ignore EventSource error
+      }
+    }
+
     return () => {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
       if (channel) channel.close();
+      if (eventSource) eventSource.close();
     };
-  }, []);
+  }, [isEffectiveOffline]);
 
-  // Synchronize queued offline items when connectivity returns or manual sync triggered
+  // Synchronize queued offline items & cloud state
   const handleSynchronizeNow = useCallback(async () => {
-    setIsSyncing(true);
+    const localSynced = synchronizeOfflineQueue(
+      {
+        referrals,
+        events,
+        sms_logs: smsLogs,
+        notifications,
+      },
+      syncQueue
+    );
+
+    let finalReferrals = localSynced.referrals;
+    let finalEvents = localSynced.events;
+    let finalSms = localSynced.sms_logs;
+    let finalNotifs = localSynced.notifications;
+    let finalUsers = users;
+    let finalRev = cloudRevision;
+    let finalCloudLogs = cloudLogs;
+
     try {
-      // First run pure idempotent synchronization locally
-      const localSynced = synchronizeOfflineQueue(
-        {
-          referrals,
-          events,
-          sms_logs: smsLogs,
-          notifications,
-        },
-        syncQueue
+      const serverSynced = await postSyncBatchToServer(
+        syncQueue,
+        finalReferrals,
+        finalEvents,
+        finalSms,
+        finalNotifs,
+        users
       );
-
-      let finalReferrals = localSynced.referrals;
-      let finalEvents = localSynced.events;
-      let finalSms = localSynced.sms_logs;
-      let finalNotifs = localSynced.notifications;
-      let finalUsers = users;
-
-      // Also sync with backend API if reachable
-      try {
-        const serverSynced = await postSyncBatchToServer(
-          syncQueue,
-          finalReferrals,
-          finalEvents,
-          finalSms,
-          finalNotifs,
-          users
-        );
-        finalReferrals = serverSynced.referrals;
-        finalEvents = serverSynced.events;
-        finalSms = serverSynced.sms_logs;
-        finalNotifs = serverSynced.notifications;
-        finalUsers = serverSynced.users;
-      } catch {
-        // Local IndexedDB sync completed even if backend is unreachable
-      }
-
-      setReferrals(finalReferrals);
-      setEvents(finalEvents);
-      setSmsLogs(finalSms);
-      setNotifications(finalNotifs);
-      setUsers(finalUsers);
-      setSyncQueue([]);
-      setSimulatedOffline(false);
-
-      // Update activeQrReferral if open
-      if (activeQrReferral) {
-        const updatedQrRef = finalReferrals.find(
-          (r) => r.referral_id === activeQrReferral.referral_id
-        );
-        if (updatedQrRef) setActiveQrReferral(updatedQrRef);
-      }
-
-      setLastSyncMessage(
-        `Synced (${localSynced.syncedCount} queued ${
-          localSynced.syncedCount === 1 ? 'event' : 'events'
-        } synchronized, ${localSynced.skippedDuplicates} duplicates prevented)`
-      );
-
-      await persistState({
-        referrals: finalReferrals,
-        events: finalEvents,
-        sms_logs: finalSms,
-        notifications: finalNotifs,
-        sync_queue: [],
-        users: finalUsers,
-      });
-    } finally {
-      setIsSyncing(false);
+      finalReferrals = serverSynced.referrals;
+      finalEvents = serverSynced.events;
+      finalSms = serverSynced.sms_logs;
+      finalNotifs = serverSynced.notifications;
+      finalUsers = serverSynced.users;
+      finalRev = serverSynced.cloud_revision || finalRev;
+      finalCloudLogs = serverSynced.cloud_logs || finalCloudLogs;
+    } catch {
+      // Local IndexedDB sync completed even if backend is unreachable
     }
+
+    setReferrals(finalReferrals);
+    setEvents(finalEvents);
+    setSmsLogs(finalSms);
+    setNotifications(finalNotifs);
+    setUsers(finalUsers);
+    setCloudRevision(finalRev);
+    setCloudLogs(finalCloudLogs);
+    setSyncQueue([]);
+    setSimulatedOffline(false);
+
+    if (activeQrReferral) {
+      const updatedQrRef = finalReferrals.find(
+        (r) => r.referral_id === activeQrReferral.referral_id
+      );
+      if (updatedQrRef) setActiveQrReferral(updatedQrRef);
+    }
+
+    await persistState({
+      referrals: finalReferrals,
+      events: finalEvents,
+      sms_logs: finalSms,
+      notifications: finalNotifs,
+      sync_queue: [],
+      users: finalUsers,
+      cloud_revision: finalRev,
+      cloud_logs: finalCloudLogs,
+    });
   }, [
     referrals,
     events,
@@ -286,39 +309,113 @@ export default function App() {
     notifications,
     syncQueue,
     users,
+    cloudRevision,
+    cloudLogs,
     activeQrReferral,
     persistState,
   ]);
 
-  // Toggle offline simulation mode; if transitioning from offline -> online, auto-sync queue!
+  // Toggle offline simulation mode
   const handleToggleSimulatedOffline = useCallback(() => {
     if (simulatedOffline) {
       setSimulatedOffline(false);
       if (syncQueue.length > 0) {
         handleSynchronizeNow();
-      } else {
-        setLastSyncMessage('Online · All referral events synced');
       }
     } else {
       setSimulatedOffline(true);
-      setLastSyncMessage('Saved offline — queueing updates in IndexedDB');
     }
   }, [simulatedOffline, syncQueue.length, handleSynchronizeNow]);
 
-  // Handler: Create a new referral
+  // Select referral & mark timeline viewed
+  const handleSelectReferral = useCallback(
+    (referralId: string, markViewed: boolean = false) => {
+      setSelectedReferralId(referralId);
+      setReceivingLookupId(referralId);
+      if (markViewed) {
+        const nextReferrals = markReferralTimelineViewed(referrals, referralId);
+        setReferrals(nextReferrals);
+        persistState({
+          referrals: nextReferrals,
+          events,
+          sms_logs: smsLogs,
+          notifications,
+          sync_queue: syncQueue,
+          users,
+          cloud_revision: cloudRevision,
+          cloud_logs: cloudLogs,
+        });
+        if (!isEffectiveOffline) {
+          postSyncBatchToServer(
+            [],
+            nextReferrals,
+            events,
+            smsLogs,
+            notifications,
+            users
+          ).catch(() => {});
+        }
+      }
+    },
+    [
+      referrals,
+      events,
+      smsLogs,
+      notifications,
+      syncQueue,
+      users,
+      cloudRevision,
+      cloudLogs,
+      isEffectiveOffline,
+      persistState,
+    ]
+  );
+
+  // Mark an in-app notification as read
+  const handleMarkNotificationRead = useCallback(
+    (notificationId: string) => {
+      const nextNotifs = notifications.map((n) =>
+        n.notification_id === notificationId ? { ...n, read: true } : n
+      );
+      setNotifications(nextNotifs);
+      persistState({
+        referrals,
+        events,
+        sms_logs: smsLogs,
+        notifications: nextNotifs,
+        sync_queue: syncQueue,
+        users,
+        cloud_revision: cloudRevision,
+        cloud_logs: cloudLogs,
+      });
+    },
+    [
+      referrals,
+      events,
+      smsLogs,
+      notifications,
+      syncQueue,
+      users,
+      cloudRevision,
+      cloudLogs,
+      persistState,
+    ]
+  );
+
+  // Create a new referral (enforces Referring Staff role permission)
   const handleCreateReferral = useCallback(
     (input: {
       patient_code: string;
       referring_facility: string;
       receiving_facility: string;
       primary_category: string;
-      sub_category?: string;
       priority: ReferralPriority;
     }): Referral => {
       const created = createReferralRecord({
         ...input,
         existingReferralIds: referrals.map((r) => r.referral_id),
         isOffline: isEffectiveOffline,
+        actorUser: currentUser,
       });
 
       const nextReferrals = [created.referral, ...referrals];
@@ -335,13 +432,9 @@ export default function App() {
           sms: created.smsMessage,
           queued_at: created.referral.created_at,
         });
-        setLastSyncMessage(
-          `Saved offline: Referral ${created.referral.referral_id} queued for sync`
-        );
       } else {
-        setLastSyncMessage(
-          `Synced: Referral ${created.referral.referral_id} created`
-        );
+        const nextRev = cloudRevision + 1;
+        setCloudRevision(nextRev);
         postSyncBatchToServer(
           [],
           nextReferrals,
@@ -349,7 +442,12 @@ export default function App() {
           nextSms,
           notifications,
           users
-        ).catch(() => {});
+        )
+          .then((srv) => {
+            if (srv.cloud_revision) setCloudRevision(srv.cloud_revision);
+            if (srv.cloud_logs) setCloudLogs(srv.cloud_logs);
+          })
+          .catch(() => {});
       }
 
       setReferrals(nextReferrals);
@@ -367,6 +465,8 @@ export default function App() {
         notifications,
         sync_queue: nextQueue,
         users,
+        cloud_revision: cloudRevision + 1,
+        cloud_logs: cloudLogs,
       });
 
       return created.referral;
@@ -378,12 +478,15 @@ export default function App() {
       notifications,
       syncQueue,
       users,
+      currentUser,
+      cloudRevision,
+      cloudLogs,
       isEffectiveOffline,
       persistState,
     ]
   );
 
-  // Handler: Update referral status from Receiving Facility
+  // Update referral status from Scan / Update screen (enforces Receiving Staff role permission)
   const handleUpdateStatus = useCallback(
     (referralId: string, facilityId: string, status: ReferralStatus) => {
       const result = applyReferralStatusUpdate({
@@ -393,6 +496,7 @@ export default function App() {
         facility_id: facilityId,
         status,
         isOffline: isEffectiveOffline,
+        actorUser: currentUser,
       });
 
       const nextReferrals = result.referrals;
@@ -411,11 +515,9 @@ export default function App() {
           notification: result.notification,
           queued_at: result.newEvent.timestamp,
         });
-        setLastSyncMessage(
-          `Saved offline: ${referralId} marked ${status} (queued for sync)`
-        );
       } else {
-        setLastSyncMessage(`Synced: ${referralId} marked ${status}`);
+        const nextRev = cloudRevision + 1;
+        setCloudRevision(nextRev);
         postSyncBatchToServer(
           [],
           nextReferrals,
@@ -423,7 +525,12 @@ export default function App() {
           nextSms,
           nextNotifs,
           users
-        ).catch(() => {});
+        )
+          .then((srv) => {
+            if (srv.cloud_revision) setCloudRevision(srv.cloud_revision);
+            if (srv.cloud_logs) setCloudLogs(srv.cloud_logs);
+          })
+          .catch(() => {});
       }
 
       setReferrals(nextReferrals);
@@ -440,6 +547,8 @@ export default function App() {
         notifications: nextNotifs,
         sync_queue: nextQueue,
         users,
+        cloud_revision: cloudRevision + 1,
+        cloud_logs: cloudLogs,
       });
 
       return {
@@ -455,42 +564,13 @@ export default function App() {
       notifications,
       syncQueue,
       users,
+      currentUser,
+      cloudRevision,
+      cloudLogs,
       isEffectiveOffline,
       persistState,
     ]
   );
-
-  // Notification handlers
-  const handleMarkNotificationRead = useCallback(
-    (notificationId: string) => {
-      const nextNotifs = notifications.map((n) =>
-        n.notification_id === notificationId ? { ...n, read: true } : n
-      );
-      setNotifications(nextNotifs);
-      persistState({
-        referrals,
-        events,
-        sms_logs: smsLogs,
-        notifications: nextNotifs,
-        sync_queue: syncQueue,
-        users,
-      });
-    },
-    [referrals, events, smsLogs, notifications, syncQueue, users, persistState]
-  );
-
-  const handleMarkAllNotificationsRead = useCallback(() => {
-    const nextNotifs = notifications.map((n) => ({ ...n, read: true }));
-    setNotifications(nextNotifs);
-    persistState({
-      referrals,
-      events,
-      sms_logs: smsLogs,
-      notifications: nextNotifs,
-      sync_queue: syncQueue,
-      users,
-    });
-  }, [referrals, events, smsLogs, notifications, syncQueue, users, persistState]);
 
   // Auth handlers
   const handleLogin = useCallback(
@@ -499,9 +579,10 @@ export default function App() {
       if (res.authenticated && res.user) {
         setCurrentUser(res.user);
         if (res.user.facility_type === 'receiving') {
-          setActiveTab('receiving');
+          setIsCreatingReferral(false);
+          setActiveSection('scan_update');
         } else {
-          setActiveTab('dashboard');
+          setActiveSection('referrals');
         }
       }
       return { authenticated: res.authenticated, error: res.error };
@@ -529,11 +610,14 @@ export default function App() {
           notifications,
           sync_queue: syncQueue,
           users: res.users,
+          cloud_revision: cloudRevision,
+          cloud_logs: cloudLogs,
         });
         if (res.user.facility_type === 'receiving') {
-          setActiveTab('receiving');
+          setIsCreatingReferral(false);
+          setActiveSection('scan_update');
         } else {
-          setActiveTab('dashboard');
+          setActiveSection('referrals');
         }
         return { ok: true };
       } catch (err) {
@@ -543,27 +627,37 @@ export default function App() {
         };
       }
     },
-    [users, referrals, events, smsLogs, notifications, syncQueue, persistState]
+    [
+      users,
+      referrals,
+      events,
+      smsLogs,
+      notifications,
+      syncQueue,
+      cloudRevision,
+      cloudLogs,
+      persistState,
+    ]
   );
 
-  const handleResetDemoData = useCallback(async () => {
-    const fresh = await clearAndResetLocalSnapshot();
-    try {
-      await postResetServerState();
-    } catch {
-      // Ignore if offline
-    }
-    setReferrals(fresh.referrals);
-    setEvents(fresh.events);
-    setSmsLogs(fresh.sms_logs);
-    setNotifications(fresh.notifications);
-    setSyncQueue([]);
-    setSelectedReferralId('XL-1001');
-    setActiveQrReferral(null);
-    setLastSyncMessage('Synthetic dataset reset to initial state');
-  }, []);
+  const handleSwitchToReferringStaff = useCallback(() => {
+    const referringUser =
+      users.find((u) => u.facility_type === 'referring') ||
+      INITIAL_DEMO_USERS[0];
+    setCurrentUser(referringUser);
+    setActiveSection('referrals');
+  }, [users]);
 
-  // Poll server state every 8 seconds when online & no offline queue so multi-tab / multi-node stays live
+  const handleSwitchToReceivingStaff = useCallback(() => {
+    const receivingUser =
+      users.find((u) => u.facility_type === 'receiving') ||
+      INITIAL_DEMO_USERS[2];
+    setCurrentUser(receivingUser);
+    setIsCreatingReferral(false);
+    setActiveSection('scan_update');
+  }, [users]);
+
+  // Poll server state every 8 seconds when online & no offline queue
   useEffect(() => {
     if (isEffectiveOffline || syncQueue.length > 0) return;
     const interval = setInterval(async () => {
@@ -574,6 +668,8 @@ export default function App() {
           setEvents(srv.events);
           setSmsLogs(srv.sms_logs);
           setNotifications(srv.notifications);
+          if (srv.cloud_revision) setCloudRevision(srv.cloud_revision);
+          if (srv.cloud_logs) setCloudLogs(srv.cloud_logs);
         }
       } catch {
         // Ignore network poll error
@@ -584,265 +680,220 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 pb-16 md:pb-0">
-      {/* Top Bar Contract: 3 zones separated by gap-8 */}
-      <header className="flex items-center justify-between gap-8 px-6 py-4 border-b border-slate-200 bg-white sticky top-0 z-30">
-        {/* Zone 1: Single text element wordmark */}
+      {/* Top Bar: Wordmark + 3 Primary Sections + Role Session & Offline Status */}
+      <header className="flex items-center justify-between gap-4 px-5 py-3.5 border-b border-slate-200/90 bg-white sticky top-0 z-30 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
         <a
-          href="#dashboard"
+          href="#referrals"
           onClick={(e) => {
             e.preventDefault();
-            setActiveTab('dashboard');
+            setIsCreatingReferral(false);
+            setActiveQrReferral(null);
+            setActiveSection('referrals');
           }}
-          className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
+          className="flex items-center gap-2 text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
         >
-          Xareloop
+          <span className="inline-block w-2.5 h-2.5 rounded-full bg-teal-700" />
+          <span>Xareloop</span>
         </a>
 
-        {/* Zone 2: 4 clean single-line text navigation links */}
+        {/* Only 3 Primary Navigation Sections: 1. Referrals, 2. Scan / Update, 3. Search */}
         <nav
-          aria-label="Primary Navigation"
-          className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600"
+          aria-label="Main Navigation"
+          className="hidden md:flex items-center gap-6 text-sm font-medium"
         >
-          <a
-            href="#referrals"
-            onClick={(e) => {
-              e.preventDefault();
-              setActiveTab('dashboard');
-            }}
-            className={`transition-colors whitespace-nowrap shrink-0 py-1 ${
-              activeTab === 'dashboard'
-                ? 'text-slate-900 font-bold underline decoration-teal-700 decoration-2 underline-offset-8'
-                : 'hover:text-slate-900 hover:underline underline-offset-8'
-            }`}
-          >
-            Referrals
-          </a>
-          <a
-            href="#create"
-            onClick={(e) => {
-              e.preventDefault();
-              setActiveQrReferral(null);
-              setActiveTab('create');
-            }}
-            className={`transition-colors whitespace-nowrap shrink-0 py-1 ${
-              activeTab === 'create'
-                ? 'text-slate-900 font-bold underline decoration-teal-700 decoration-2 underline-offset-8'
-                : 'hover:text-slate-900 hover:underline underline-offset-8'
-            }`}
-          >
-            Create Referral
-          </a>
-          <a
-            href="#receiving"
-            onClick={(e) => {
-              e.preventDefault();
-              setActiveTab('receiving');
-            }}
-            className={`transition-colors whitespace-nowrap shrink-0 py-1 ${
-              activeTab === 'receiving'
-                ? 'text-slate-900 font-bold underline decoration-teal-700 decoration-2 underline-offset-8'
-                : 'hover:text-slate-900 hover:underline underline-offset-8'
-            }`}
-          >
-            Receiving Lookup
-          </a>
-          <a
-            href="#metrics"
-            onClick={(e) => {
-              e.preventDefault();
-              setActiveTab('metrics');
-            }}
-            className={`transition-colors whitespace-nowrap shrink-0 py-1 ${
-              activeTab === 'metrics'
-                ? 'text-slate-900 font-bold underline decoration-teal-700 decoration-2 underline-offset-8'
-                : 'hover:text-slate-900 hover:underline underline-offset-8'
-            }`}
-          >
-            Metrics & SMS
-          </a>
-        </nav>
-
-        {/* Zone 3: 1 primary action */}
-        <div className="flex items-center gap-3 shrink-0">
           <button
             type="button"
             onClick={() => {
+              setIsCreatingReferral(false);
               setActiveQrReferral(null);
-              setActiveTab('create');
+              setActiveSection('referrals');
             }}
-            className="px-4 py-2 text-xs font-semibold text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors whitespace-nowrap shrink-0 min-h-[40px]"
+            className={`py-1.5 transition-colors whitespace-nowrap ${
+              activeSection === 'referrals'
+                ? 'text-slate-900 font-bold underline decoration-teal-700 decoration-2 underline-offset-8'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
           >
-            + New Referral
+            Referrals
           </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsCreatingReferral(false);
+              setActiveSection('scan_update');
+            }}
+            className={`px-4 py-1.5 rounded-xl font-bold transition-all whitespace-nowrap ${
+              activeSection === 'scan_update'
+                ? 'bg-gradient-to-r from-[#0B5E5E] to-[#0F766E] text-white shadow-xs'
+                : 'bg-teal-50 text-teal-900 border border-teal-200/80 hover:bg-teal-100/80'
+            }`}
+          >
+            Scan / Update
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsCreatingReferral(false);
+              setActiveSection('search');
+            }}
+            className={`py-1.5 transition-colors whitespace-nowrap ${
+              activeSection === 'search'
+                ? 'text-slate-900 font-bold underline decoration-teal-700 decoration-2 underline-offset-8'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Search
+          </button>
+        </nav>
+
+        {/* Right Controls: Active Staff Role Switcher + Minimal Offline Status */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            data-testid="active-role-auth-btn"
+            onClick={() => setIsAuthModalOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-100 transition-colors whitespace-nowrap min-h-[36px]"
+          >
+            <UserCheck className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+            <span>{staffRoleLabel}</span>
+          </button>
+
+          <OfflineSyncBar
+            isEffectiveOffline={isEffectiveOffline}
+            onToggleSimulatedOffline={handleToggleSimulatedOffline}
+          />
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1">
-        {/* Contextual Workspace Toolbar: Prototype Disclaimer, Offline/Sync Bar, Notifications & Auth Session */}
-        <OfflineSyncBar
-          isEffectiveOffline={isEffectiveOffline}
-          simulatedOffline={simulatedOffline}
-          onToggleSimulatedOffline={handleToggleSimulatedOffline}
-          syncQueue={syncQueue}
-          isSyncing={isSyncing}
-          lastSyncMessage={lastSyncMessage}
-          onSyncNow={handleSynchronizeNow}
-          currentUser={currentUser}
-          onOpenAuthModal={() => setIsAuthModalOpen(true)}
-          notifications={notifications}
-          onMarkNotificationRead={handleMarkNotificationRead}
-          onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
-          onOpenReferralFromNotification={(referralId) => {
-            setSelectedReferralId(referralId);
-            setActiveTab('dashboard');
-          }}
-        />
+      {/* Main Content */}
+      <main className="flex-1 px-4 sm:px-6 py-6">
+        {activeSection === 'referrals' && !isCreatingReferral && (
+          <ReferringDashboard
+            referrals={referrals}
+            events={events}
+            notifications={notifications}
+            permissions={permissions}
+            selectedReferralId={selectedReferralId}
+            onSelectReferral={handleSelectReferral}
+            onCreateNewClick={() => {
+              setActiveQrReferral(null);
+              setIsCreatingReferral(true);
+            }}
+            onViewQr={(ref) => {
+              setActiveQrReferral(ref);
+              setIsCreatingReferral(true);
+            }}
+            onMarkNotificationRead={handleMarkNotificationRead}
+            onSwitchToReferringStaff={handleSwitchToReferringStaff}
+            onGoToScanUpdate={() => setActiveSection('scan_update')}
+          />
+        )}
 
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 py-6">
-          {activeTab === 'dashboard' && (
-            <ReferringDashboard
-              referrals={referrals}
-              events={events}
-              notifications={notifications}
-              selectedReferralId={selectedReferralId}
-              onSelectReferral={(id) => setSelectedReferralId(id)}
-              onCreateNewClick={() => {
-                setActiveQrReferral(null);
-                setActiveTab('create');
-              }}
-              onViewQr={(ref) => {
-                setActiveQrReferral(ref);
-                setActiveTab('create');
-              }}
-              onOpenInReceiving={(id) => {
-                setReceivingLookupId(id);
-                setActiveTab('receiving');
-              }}
-              onMarkNotificationRead={handleMarkNotificationRead}
-            />
-          )}
+        {activeSection === 'referrals' && isCreatingReferral && (
+          <CreateReferralView
+            existingReferrals={referrals}
+            defaultReferringFacility={
+              currentUser.facility_type === 'referring'
+                ? currentUser.facility_name
+                : 'PHC Demo North'
+            }
+            activeQrReferral={activeQrReferral}
+            onClearActiveQrReferral={() => setActiveQrReferral(null)}
+            onCreateReferral={handleCreateReferral}
+            onBackToDashboard={() => {
+              setActiveQrReferral(null);
+              setIsCreatingReferral(false);
+            }}
+          />
+        )}
 
-          {activeTab === 'create' && (
-            <CreateReferralView
-              existingReferrals={referrals}
-              defaultReferringFacility={
-                currentUser.facility_type === 'referring'
-                  ? currentUser.facility_name
-                  : 'PHC Demo North'
-              }
-              activeQrReferral={activeQrReferral}
-              onClearActiveQrReferral={() => setActiveQrReferral(null)}
-              onCreateReferral={handleCreateReferral}
-              onOpenInReceiving={(id) => {
-                setReceivingLookupId(id);
-                setActiveTab('receiving');
-              }}
-              onBackToDashboard={() => {
-                setActiveQrReferral(null);
-                setActiveTab('dashboard');
-              }}
-            />
-          )}
+        {activeSection === 'scan_update' && (
+          <ReceivingFacilityView
+            mode="scan_update"
+            referrals={referrals}
+            events={events}
+            initialLookupId={receivingLookupId}
+            permissions={permissions}
+            onSwitchToReceivingStaff={handleSwitchToReceivingStaff}
+            onUpdateStatus={handleUpdateStatus}
+          />
+        )}
 
-          {activeTab === 'receiving' && (
-            <ReceivingFacilityView
-              referrals={referrals}
-              events={events}
-              initialLookupId={receivingLookupId}
-              defaultReceivingFacility={
-                currentUser.facility_type === 'receiving'
-                  ? currentUser.facility_name
-                  : 'District Hospital Demo'
-              }
-              onUpdateStatus={handleUpdateStatus}
-              onViewQr={(ref) => {
-                setActiveQrReferral(ref);
-                setActiveTab('create');
-              }}
-            />
-          )}
-
-          {activeTab === 'metrics' && (
-            <MetricsAndSmsView
-              referrals={referrals}
-              events={events}
-              smsLogs={smsLogs}
-              onResetDemoData={handleResetDemoData}
-              onSelectReferralFromSms={(id) => {
-                setSelectedReferralId(id);
-                setActiveTab('dashboard');
-              }}
-            />
-          )}
-        </div>
+        {activeSection === 'search' && (
+          <ReceivingFacilityView
+            mode="search"
+            referrals={referrals}
+            events={events}
+            initialLookupId={receivingLookupId}
+            permissions={permissions}
+            onUpdateStatus={handleUpdateStatus}
+            onViewQr={(ref) => {
+              setActiveQrReferral(ref);
+              setIsCreatingReferral(true);
+              setActiveSection('referrals');
+            }}
+          />
+        )}
       </main>
 
-      {/* Clean Quiet Footer */}
-      <footer className="border-t border-slate-200 bg-white px-6 py-4 text-xs text-slate-500">
-        <div className="mx-auto max-w-7xl flex flex-wrap items-center justify-between gap-4">
-          <div>
-            Xareloop Prototype — Low-Bandwidth Clinical Referral-Feedback
-            Workflow. Not for clinical use.
-          </div>
-          <div>
-            All patient records shown (SYN-001 through SYN-012) are strictly
-            synthetic.
-          </div>
-        </div>
-      </footer>
-
-      {/* Mobile Bottom Tab Bar (Thumb-Zone Navigation on Mobile Viewports) */}
+      {/* Mobile 3-Section Bottom Bar */}
       <nav
         aria-label="Mobile Navigation"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 grid grid-cols-4 items-center h-14"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200 grid grid-cols-3 items-center h-14"
       >
         <button
           type="button"
-          onClick={() => setActiveTab('dashboard')}
-          className={`flex flex-col items-center justify-center h-full text-[11px] font-medium ${
-            activeTab === 'dashboard' ? 'text-teal-800 font-bold' : 'text-slate-600'
+          onClick={() => {
+            setIsCreatingReferral(false);
+            setActiveQrReferral(null);
+            setActiveSection('referrals');
+          }}
+          className={`flex flex-col items-center justify-center h-full text-xs ${
+            activeSection === 'referrals'
+              ? 'text-teal-800 font-bold'
+              : 'text-slate-600 font-medium'
           }`}
         >
           <ClipboardList className="w-4 h-4" />
           <span className="mt-0.5">Referrals</span>
         </button>
+
         <button
           type="button"
           onClick={() => {
-            setActiveQrReferral(null);
-            setActiveTab('create');
+            setIsCreatingReferral(false);
+            setActiveSection('scan_update');
           }}
-          className={`flex flex-col items-center justify-center h-full text-[11px] font-medium ${
-            activeTab === 'create' ? 'text-teal-800 font-bold' : 'text-slate-600'
-          }`}
-        >
-          <PlusCircle className="w-4 h-4" />
-          <span className="mt-0.5">Create</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('receiving')}
-          className={`flex flex-col items-center justify-center h-full text-[11px] font-medium ${
-            activeTab === 'receiving' ? 'text-teal-800 font-bold' : 'text-slate-600'
+          className={`flex flex-col items-center justify-center h-full text-xs ${
+            activeSection === 'scan_update'
+              ? 'bg-gradient-to-r from-[#0B5E5E] to-[#0F766E] text-white font-bold'
+              : 'text-teal-800 font-bold'
           }`}
         >
           <QrCode className="w-4 h-4" />
-          <span className="mt-0.5">Receiving</span>
+          <span className="mt-0.5">Scan / Update</span>
         </button>
+
         <button
           type="button"
-          onClick={() => setActiveTab('metrics')}
-          className={`flex flex-col items-center justify-center h-full text-[11px] font-medium ${
-            activeTab === 'metrics' ? 'text-teal-800 font-bold' : 'text-slate-600'
+          onClick={() => {
+            setIsCreatingReferral(false);
+            setActiveSection('search');
+          }}
+          className={`flex flex-col items-center justify-center h-full text-xs ${
+            activeSection === 'search'
+              ? 'text-teal-800 font-bold'
+              : 'text-slate-600 font-medium'
           }`}
         >
-          <BarChart3 className="w-4 h-4" />
-          <span className="mt-0.5">Metrics</span>
+          <Search className="w-4 h-4" />
+          <span className="mt-0.5">Search</span>
         </button>
       </nav>
 
-      {/* Authentication & Facility Switcher Modal */}
+      {/* Role & User Authentication Modal */}
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
@@ -853,9 +904,10 @@ export default function App() {
         onSelectDemoUser={(user) => {
           setCurrentUser(user);
           if (user.facility_type === 'receiving') {
-            setActiveTab('receiving');
+            setIsCreatingReferral(false);
+            setActiveSection('scan_update');
           } else {
-            setActiveTab('dashboard');
+            setActiveSection('referrals');
           }
         }}
       />

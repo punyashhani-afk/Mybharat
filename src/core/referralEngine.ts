@@ -12,7 +12,9 @@ import type {
   ReferralCategory,
   ReferralPriority,
   ReferralStatus,
+  RolePermissions,
   SmsFallbackMessage,
+  StaffRole,
   StatusEvent,
   SyncQueueItem,
   SyncStatus,
@@ -42,7 +44,52 @@ export function getSubCategoriesForPrimary(primaryCategory: string): string[] {
 }
 
 /**
- * Validates that a patient code strictly conforms to the synthetic format (e.g., SYN-001).
+ * Determines whether a referral has a new status update (e.g., 'Arrived', 'Seen', 'Treated', 'Follow-up', 'Back-referred')
+ * since the last time the referring user viewed that specific referral's timeline.
+ */
+export function hasUnseenStatusUpdate(referral: Referral): boolean {
+  if (
+    referral.current_status === 'Referred' &&
+    Date.parse(referral.last_updated_at) <= Date.parse(referral.created_at)
+  ) {
+    return false;
+  }
+  if (!referral.last_viewed_by_referring_at) {
+    return true;
+  }
+  const updatedMs = Date.parse(referral.last_updated_at);
+  const viewedMs = Date.parse(referral.last_viewed_by_referring_at);
+  if (Number.isNaN(updatedMs) || Number.isNaN(viewedMs)) {
+    return false;
+  }
+  return updatedMs > viewedMs;
+}
+
+/**
+ * Marks a specific referral's timeline as viewed by the referring user, clearing its unseen status highlight.
+ */
+export function markReferralTimelineViewed(
+  referrals: Referral[],
+  referralId: string,
+  viewedAtIso?: string
+): Referral[] {
+  const normalizedId = (referralId || '').trim().toUpperCase();
+  return referrals.map((r) => {
+    if (r.referral_id.toUpperCase() !== normalizedId) {
+      return r;
+    }
+    const nowMs = viewedAtIso ? Date.parse(viewedAtIso) : Date.now();
+    const updatedMs = Date.parse(r.last_updated_at) || 0;
+    const effectiveMs = Math.max(nowMs, updatedMs);
+    return {
+      ...r,
+      last_viewed_by_referring_at: new Date(effectiveMs).toISOString(),
+    };
+  });
+}
+
+/**
+ * Validates that a patient code strictly conforms to the synthetic format (e.g., SYN-001 or SYN-CUST01).
  * Rejects real names, phone numbers, ABHA numbers (14 digits), or addresses.
  */
 export function validateSyntheticPatientCode(code: string): {
@@ -53,12 +100,12 @@ export function validateSyntheticPatientCode(code: string): {
   if (!trimmed) {
     return { valid: false, error: 'Patient code is required.' };
   }
-  const syntheticRegex = /^SYN-[0-9]{3,6}$/;
+  const syntheticRegex = /^SYN-[A-Z0-9]{3,8}$/;
   if (!syntheticRegex.test(trimmed)) {
     return {
       valid: false,
       error:
-        'Only synthetic patient codes (format SYN-001, SYN-002, etc.) are permitted. Never enter real names, phone numbers, or ABHA IDs.',
+        'Only synthetic patient codes (format SYN-001, SYN-002, SYN-CUST1, etc.) are permitted. Never enter real names, phone numbers, or ABHA IDs.',
     };
   }
   return { valid: true };
@@ -87,10 +134,27 @@ export function validateSyntheticDataset(referrals: Referral[]): {
 /**
  * Generates a unique short referral ID (e.g., XL-1007 or XL-4829) that does not collide with existing IDs.
  */
-export function generateUniqueReferralId(existingIds: Iterable<string>): string {
+export function generateUniqueReferralId(
+  existingIds: Iterable<string>,
+  preferredCustomId?: string
+): string {
   const idSet = new Set(
     Array.from(existingIds).map((id) => id.trim().toUpperCase())
   );
+
+  if (preferredCustomId && preferredCustomId.trim()) {
+    const cleaned = preferredCustomId.trim().toUpperCase();
+    const normalized = cleaned.startsWith('XL-') ? cleaned : `XL-${cleaned}`;
+    if (!/^XL-[A-Z0-9]{3,8}$/.test(normalized)) {
+      throw new Error(
+        'Custom Referral ID must use format XL-XXXX (3 to 8 alphanumeric characters after XL-).'
+      );
+    }
+    if (idSet.has(normalized)) {
+      throw new Error(`Referral ID ${normalized} already exists.`);
+    }
+    return normalized;
+  }
 
   let maxSequential = 1000;
   for (const id of idSet) {
@@ -121,6 +185,24 @@ export function generateUniqueReferralId(existingIds: Iterable<string>): string 
   }
 
   throw new Error('Unable to generate unique referral ID');
+}
+
+/**
+ * Generates the next available synthetic patient code (e.g. SYN-007, SYN-008, etc.)
+ */
+export function generateNextSyntheticPatientCode(
+  existingReferrals: Pick<Referral, 'patient_code'>[]
+): string {
+  const used = new Set(
+    existingReferrals.map((r) => r.patient_code.trim().toUpperCase())
+  );
+  for (let i = 1; i <= 999; i++) {
+    const code = `SYN-${String(i).padStart(3, '0')}`;
+    if (!used.has(code)) {
+      return code;
+    }
+  }
+  return `SYN-${Math.floor(1000 + Math.random() * 9000)}`;
 }
 
 /**
@@ -195,10 +277,14 @@ export interface CreateReferralInput {
   primary_category?: ReferralCategory;
   sub_category?: string;
   referral_category?: ReferralCategory;
+  custom_note?: string;
+  is_custom?: boolean;
+  custom_referral_id?: string;
   priority: ReferralPriority;
   existingReferralIds?: Iterable<string>;
   nowIso?: string;
   isOffline?: boolean;
+  actorUser?: Pick<UserAccount, 'facility_type' | 'username'> | null;
 }
 
 export interface CreateReferralResult {
@@ -208,12 +294,14 @@ export interface CreateReferralResult {
 }
 
 /**
- * Creates a new Referral along with its initial 'Referred' StatusEvent and simulated SMS notification.
- * Supports primary_category + optional sub_category as well as direct referral_category.
+ * Creates a new Referral (standard or custom) along with its initial 'Referred' StatusEvent and simulated SMS notification.
  */
 export function createReferralRecord(
   input: CreateReferralInput
 ): CreateReferralResult {
+  if (input.actorUser !== undefined) {
+    assertRolePermission(input.actorUser, 'CREATE_REFERRAL');
+  }
   const validation = validateSyntheticPatientCode(input.patient_code);
   if (!validation.valid) {
     throw new Error(validation.error);
@@ -224,7 +312,10 @@ export function createReferralRecord(
   if (!input.receiving_facility?.trim()) {
     throw new Error('Receiving facility is required.');
   }
-  if (input.referring_facility.trim() === input.receiving_facility.trim()) {
+  if (
+    input.referring_facility.trim().toLowerCase() ===
+    input.receiving_facility.trim().toLowerCase()
+  ) {
     throw new Error(
       'Receiving facility must be different from referring facility.'
     );
@@ -243,7 +334,10 @@ export function createReferralRecord(
 
   const timestamp = input.nowIso || new Date().toISOString();
   const syncStatus: SyncStatus = input.isOffline ? 'Saved offline' : 'Synced';
-  const referralId = generateUniqueReferralId(input.existingReferralIds || []);
+  const referralId = generateUniqueReferralId(
+    input.existingReferralIds || [],
+    input.custom_referral_id
+  );
   const normalizedPatientCode = input.patient_code.trim().toUpperCase();
 
   const referral: Referral = {
@@ -254,10 +348,13 @@ export function createReferralRecord(
     primary_category: primaryCat,
     sub_category: subCat,
     referral_category: fullCategoryLabel,
+    custom_note: input.custom_note?.trim() || undefined,
+    is_custom: Boolean(input.is_custom),
     priority: input.priority,
     created_at: timestamp,
     current_status: 'Referred',
     last_updated_at: timestamp,
+    last_viewed_by_referring_at: timestamp,
     sync_status: syncStatus,
   };
 
@@ -370,6 +467,7 @@ export interface ApplyStatusUpdateInput {
   status: ReferralStatus;
   timestamp?: string;
   isOffline?: boolean;
+  actorUser?: Pick<UserAccount, 'facility_type' | 'username'> | null;
 }
 
 export interface ApplyStatusUpdateResult {
@@ -385,10 +483,15 @@ export interface ApplyStatusUpdateResult {
  * Records a status update for a referral, updating current_status, last_updated_at,
  * appending a StatusEvent, generating a simulated SMS fallback log entry,
  * and generating an in-app notification for the referring facility.
+ * Note: last_viewed_by_referring_at is preserved so that last_updated_at > last_viewed_by_referring_at
+ * triggers the visual unseen status indicator in the Referring Dashboard!
  */
 export function applyReferralStatusUpdate(
   input: ApplyStatusUpdateInput
 ): ApplyStatusUpdateResult {
+  if (input.actorUser !== undefined) {
+    assertRolePermission(input.actorUser, 'UPDATE_STATUS');
+  }
   if (!REFERRAL_STATUSES.includes(input.status)) {
     throw new Error(`Invalid status: ${input.status}`);
   }
@@ -401,7 +504,13 @@ export function applyReferralStatusUpdate(
     throw new Error('Referral not found');
   }
 
-  const timestamp = input.timestamp || new Date().toISOString();
+  const prevMs = Date.parse(lookup.referral.last_updated_at) || 0;
+  const rawNowMs = input.timestamp ? Date.parse(input.timestamp) : Date.now();
+  // Ensure timestamp strictly advances by at least 1ms so unseen comparison (last_updated_at > last_viewed_by_referring_at) is always deterministic
+  const timestamp = input.timestamp
+    ? input.timestamp
+    : new Date(Math.max(rawNowMs, prevMs + 1000)).toISOString();
+
   const syncStatus: SyncStatus = input.isOffline ? 'Saved offline' : 'Synced';
   const facilityId = input.facility_id.trim();
 
@@ -466,12 +575,7 @@ export function getReferralTimeline(
 }
 
 /**
- * Calculates the 5 required dashboard metrics from a referral & event dataset:
- * 1. Total referrals
- * 2. Referrals with confirmed arrival
- * 3. Referrals with first status update
- * 4. Referrals with follow-up recorded
- * 5. Average time (in minutes) from referral creation to first receiving-facility update
+ * Calculates the 5 required dashboard metrics from a referral & event dataset.
  */
 export function calculateDashboardMetrics(
   referrals: Referral[],
@@ -653,7 +757,7 @@ export function synchronizeOfflineQueue(
       };
       mergedEvents.push(syncedEvent);
       existingEventKeys.add(eventKey);
-      existingEventIds.add(syncedEvent.event_id);
+      existingEventIds.add(item.event.event_id);
       syncedCount += 1;
     }
 
@@ -703,6 +807,141 @@ export function synchronizeOfflineQueue(
 }
 
 /**
+ * Maps a user account's facility_type ('referring' | 'receiving') to the canonical Xareloop StaffRole.
+ */
+export function getStaffRole(
+  user: Pick<UserAccount, 'facility_type'>
+): StaffRole {
+  return user.facility_type === 'referring'
+    ? 'Referring Staff'
+    : 'Receiving Staff';
+}
+
+/**
+ * Computes role-based permissions for Referring Staff vs Receiving Staff:
+ * - Referring Staff: can create referrals and view dashboards; cannot update referral statuses.
+ * - Receiving Staff: can update referral statuses; cannot create referrals or view referring dashboards.
+ */
+export function getRolePermissions(
+  user: Pick<UserAccount, 'facility_type'> | null | undefined
+): RolePermissions {
+  if (!user) {
+    return {
+      role: 'Referring Staff',
+      canCreateReferrals: false,
+      canViewDashboard: false,
+      canUpdateReferralStatus: false,
+      canSearchReferrals: false,
+    };
+  }
+  const isReferring = user.facility_type === 'referring';
+  return {
+    role: getStaffRole(user),
+    canCreateReferrals: isReferring,
+    canViewDashboard: isReferring,
+    canUpdateReferralStatus: !isReferring,
+    canSearchReferrals: true,
+  };
+}
+
+/**
+ * Enforces role-based access control (RBAC) for protected actions.
+ */
+export function assertRolePermission(
+  user: Pick<UserAccount, 'facility_type' | 'username'> | null | undefined,
+  action: 'CREATE_REFERRAL' | 'VIEW_DASHBOARD' | 'UPDATE_STATUS'
+): void {
+  if (!user) {
+    throw new Error('Authentication required: Please sign in first.');
+  }
+  const perms = getRolePermissions(user);
+  if (action === 'CREATE_REFERRAL' && !perms.canCreateReferrals) {
+    throw new Error(
+      'Permission denied: Only Referring Staff can create referrals.'
+    );
+  }
+  if (action === 'VIEW_DASHBOARD' && !perms.canViewDashboard) {
+    throw new Error(
+      'Permission denied: Only Referring Staff can view referring dashboards.'
+    );
+  }
+  if (action === 'UPDATE_STATUS' && !perms.canUpdateReferralStatus) {
+    throw new Error(
+      'Permission denied: Only Receiving Staff can update referral statuses.'
+    );
+  }
+}
+
+/**
+ * Computes a deterministic signature digest for session tokens.
+ */
+function computeTokenSignature(payloadStr: string): string {
+  let hash = 2166136261;
+  const secret = 'XARELOOP_RBAC_AUTH_V1';
+  const combined = `${payloadStr}::${secret}`;
+  for (let i = 0; i < combined.length; i++) {
+    hash ^= combined.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
+ * Creates a signed session token for an authenticated user.
+ */
+export function createSessionToken(user: UserAccount): string {
+  const payload = JSON.stringify({
+    uid: user.user_id,
+    usr: user.username,
+    role: getStaffRole(user),
+    ft: user.facility_type,
+    fn: user.facility_name,
+  });
+  const encoded = encodeURIComponent(payload).replace(/\./g, '%2E');
+  const sig = computeTokenSignature(encoded);
+  return `xl_tok.${encoded}.${sig}`;
+}
+
+/**
+ * Verifies a signed session token against registered users.
+ */
+export function verifySessionToken(
+  token: string,
+  users: UserAccount[]
+): { valid: boolean; user: UserAccount | null; permissions?: RolePermissions } {
+  if (!token || !token.startsWith('xl_tok.')) {
+    return { valid: false, user: null };
+  }
+  const parts = token.split('.');
+  if (parts.length !== 3) {
+    return { valid: false, user: null };
+  }
+  const [, encoded, sig] = parts;
+  if (computeTokenSignature(encoded) !== sig) {
+    return { valid: false, user: null };
+  }
+  try {
+    const parsed = JSON.parse(decodeURIComponent(encoded));
+    const found = users.find(
+      (u) =>
+        u.user_id === parsed.uid &&
+        u.username.toLowerCase() === String(parsed.usr || '').toLowerCase() &&
+        u.facility_type === parsed.ft
+    );
+    if (!found) {
+      return { valid: false, user: null };
+    }
+    return {
+      valid: true,
+      user: found,
+      permissions: getRolePermissions(found),
+    };
+  } catch {
+    return { valid: false, user: null };
+  }
+}
+
+/**
  * Registers a new user account with facility type ('referring' | 'receiving') and facility name.
  */
 export function registerUserAccount(
@@ -715,7 +954,12 @@ export function registerUserAccount(
     facility_type: FacilityType;
     facility_name: string;
   }
-): { user: UserAccount; users: UserAccount[] } {
+): {
+  user: UserAccount;
+  users: UserAccount[];
+  token: string;
+  permissions: RolePermissions;
+} {
   const username = (input.username || '').trim().toLowerCase();
   if (!username || username.length < 3) {
     throw new Error('Username must be at least 3 characters.');
@@ -747,8 +991,8 @@ export function registerUserAccount(
     role_label:
       input.role_label?.trim() ||
       (input.facility_type === 'referring'
-        ? 'Referring Clinician / ANM'
-        : 'Receiving Triage Coordinator'),
+        ? 'Referring Staff'
+        : 'Receiving Staff'),
     facility_type: input.facility_type,
     facility_name: input.facility_name.trim(),
     created_at: new Date().toISOString(),
@@ -757,17 +1001,25 @@ export function registerUserAccount(
   return {
     user: newUser,
     users: [...existingUsers, newUser],
+    token: createSessionToken(newUser),
+    permissions: getRolePermissions(newUser),
   };
 }
 
 /**
- * Authenticates a user with mock credentials.
+ * Authenticates a user with credentials and returns a signed session token and role permissions.
  */
 export function authenticateUser(
   users: UserAccount[],
   username: string,
   password_mock: string
-): { authenticated: boolean; user: UserAccount | null; error?: string } {
+): {
+  authenticated: boolean;
+  user: UserAccount | null;
+  token?: string;
+  permissions?: RolePermissions;
+  error?: string;
+} {
   const normalizedUsername = (username || '').trim().toLowerCase();
   if (!normalizedUsername || !password_mock) {
     return {
@@ -787,12 +1039,15 @@ export function authenticateUser(
     return {
       authenticated: false,
       user: null,
-      error: 'Invalid credentials. Try one of the demo accounts or register a new facility account.',
+      error:
+        'Invalid credentials. Try one of the demo accounts or register a new facility account.',
     };
   }
 
   return {
     authenticated: true,
     user: found,
+    token: createSessionToken(found),
+    permissions: getRolePermissions(found),
   };
 }

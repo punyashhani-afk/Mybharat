@@ -1,8 +1,10 @@
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import {
+  INITIAL_CLOUD_SYNC_LOGS,
   INITIAL_DEMO_USERS,
   INITIAL_SYNTHETIC_EVENTS,
   INITIAL_SYNTHETIC_NOTIFICATIONS,
@@ -18,8 +20,10 @@ import {
   synchronizeOfflineQueue,
 } from './src/core/referralEngine.ts';
 import type {
+  CloudSyncLogEntry,
   InAppNotification,
   Referral,
+  ReferralStatus,
   SmsFallbackMessage,
   StatusEvent,
   SyncQueueItem,
@@ -28,6 +32,7 @@ import type {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const CLOUD_STATE_FILE = path.join(__dirname, 'data', 'cloud_state.json');
 
 interface ServerStore {
   referrals: Referral[];
@@ -35,15 +40,91 @@ interface ServerStore {
   sms_logs: SmsFallbackMessage[];
   notifications: InAppNotification[];
   users: UserAccount[];
+  cloud_revision: number;
+  cloud_logs: CloudSyncLogEntry[];
 }
 
-let store: ServerStore = {
-  referrals: [...INITIAL_SYNTHETIC_REFERRALS],
-  events: [...INITIAL_SYNTHETIC_EVENTS],
-  sms_logs: [...INITIAL_SYNTHETIC_SMS_LOGS],
-  notifications: [...INITIAL_SYNTHETIC_NOTIFICATIONS],
-  users: [...INITIAL_DEMO_USERS],
-};
+function getInitialStore(): ServerStore {
+  return {
+    referrals: [...INITIAL_SYNTHETIC_REFERRALS],
+    events: [...INITIAL_SYNTHETIC_EVENTS],
+    sms_logs: [...INITIAL_SYNTHETIC_SMS_LOGS],
+    notifications: [...INITIAL_SYNTHETIC_NOTIFICATIONS],
+    users: [...INITIAL_DEMO_USERS],
+    cloud_revision: 1,
+    cloud_logs: [...INITIAL_CLOUD_SYNC_LOGS],
+  };
+}
+
+function loadStoreFromDisk(): ServerStore {
+  try {
+    if (fs.existsSync(CLOUD_STATE_FILE)) {
+      const raw = fs.readFileSync(CLOUD_STATE_FILE, 'utf-8');
+      const parsed = JSON.parse(raw) as Partial<ServerStore>;
+      if (parsed && Array.isArray(parsed.referrals) && parsed.referrals.length > 0) {
+        return {
+          referrals: parsed.referrals,
+          events: parsed.events || [...INITIAL_SYNTHETIC_EVENTS],
+          sms_logs: parsed.sms_logs || [...INITIAL_SYNTHETIC_SMS_LOGS],
+          notifications:
+            parsed.notifications || [...INITIAL_SYNTHETIC_NOTIFICATIONS],
+          users: parsed.users || [...INITIAL_DEMO_USERS],
+          cloud_revision: parsed.cloud_revision || 1,
+          cloud_logs: parsed.cloud_logs || [...INITIAL_CLOUD_SYNC_LOGS],
+        };
+      }
+    }
+  } catch {
+    // Ignore disk read error and use default synthetic seed
+  }
+  return getInitialStore();
+}
+
+function saveStoreToDisk(current: ServerStore): void {
+  try {
+    fs.mkdirSync(path.dirname(CLOUD_STATE_FILE), { recursive: true });
+    fs.writeFileSync(CLOUD_STATE_FILE, JSON.stringify(current, null, 2), 'utf-8');
+  } catch {
+    // Ignore disk write error in read-only environments
+  }
+}
+
+let store: ServerStore = loadStoreFromDisk();
+
+// Connected SSE clients for real-time Cloud Update broadcast
+const sseClients = new Set<express.Response>();
+
+function appendCloudLog(
+  action: CloudSyncLogEntry['action'],
+  summary: string
+): CloudSyncLogEntry {
+  store.cloud_revision += 1;
+  const entry: CloudSyncLogEntry = {
+    sync_id: `CLD-${store.cloud_revision}-${Date.now()}`,
+    revision: store.cloud_revision,
+    action,
+    summary,
+    timestamp: new Date().toISOString(),
+  };
+  store.cloud_logs = [entry, ...store.cloud_logs].slice(0, 40);
+  saveStoreToDisk(store);
+  broadcastCloudUpdate();
+  return entry;
+}
+
+function broadcastCloudUpdate(): void {
+  const payload = JSON.stringify({
+    ...store,
+    server_time: new Date().toISOString(),
+  });
+  for (const client of sseClients) {
+    try {
+      client.write(`event: cloud_update\ndata: ${payload}\n\n`);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -56,13 +137,27 @@ async function startServer() {
     res.json({
       status: 'ok',
       service: 'xareloop-referral-feedback-mvp',
+      cloud_revision: store.cloud_revision,
       disclaimer:
         'Prototype — Not for Clinical Use. All patient information shown is synthetic.',
       timestamp: new Date().toISOString(),
     });
   });
 
-  // Get full synchronized state
+  // Real-time Cloud Update SSE Stream
+  app.get('/api/cloud/stream', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    sseClients.add(res);
+    req.on('close', () => {
+      sseClients.delete(res);
+    });
+  });
+
+  // Get full synchronized cloud state
   app.get('/api/state', (_req, res) => {
     res.json({
       ...store,
@@ -70,7 +165,73 @@ async function startServer() {
     });
   });
 
-  // Create referral endpoint
+  // Simulate or trigger a live remote Cloud Update from a Receiving Hospital
+  app.post('/api/cloud/simulate-remote-update', (req, res) => {
+    try {
+      const requestedId = req.body?.referral_id as string | undefined;
+      const progressionOrder: ReferralStatus[] = [
+        'Referred',
+        'Arrived',
+        'Seen',
+        'Treated',
+        'Follow-up',
+      ];
+
+      // Pick either requested referral or a referral that can advance in the loop
+      let target = requestedId
+        ? store.referrals.find(
+            (r) => r.referral_id.toUpperCase() === requestedId.toUpperCase()
+          )
+        : store.referrals.find((r) => r.current_status === 'Referred') ||
+          store.referrals.find((r) => r.current_status === 'Arrived') ||
+          store.referrals.find((r) => r.current_status === 'Seen') ||
+          store.referrals[0];
+
+      if (!target) {
+        res.status(404).json({ error: 'No referral available for cloud update' });
+        return;
+      }
+
+      const currentIdx = progressionOrder.indexOf(target.current_status);
+      const nextStatus: ReferralStatus =
+        req.body?.status ||
+        (currentIdx >= 0 && currentIdx < progressionOrder.length - 1
+          ? progressionOrder[currentIdx + 1]
+          : 'Follow-up');
+
+      const result = applyReferralStatusUpdate({
+        referrals: store.referrals,
+        events: store.events,
+        referral_id: target.referral_id,
+        facility_id: target.receiving_facility,
+        status: nextStatus,
+        isOffline: false,
+      });
+
+      store.referrals = result.referrals;
+      store.events = result.events;
+      store.sms_logs = [result.smsMessage, ...store.sms_logs];
+      store.notifications = [result.notification, ...store.notifications];
+
+      const logEntry = appendCloudLog(
+        'REMOTE_UPDATE',
+        `Cloud Receiving Update: ${target.receiving_facility} marked ${target.referral_id} (${target.patient_code}) as ${nextStatus}.`
+      );
+
+      res.json({
+        ...store,
+        updatedReferral: result.updatedReferral,
+        cloudLog: logEntry,
+        server_time: new Date().toISOString(),
+      });
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Cloud update failed',
+      });
+    }
+  });
+
+  // Create referral endpoint (standard or custom)
   app.post('/api/referrals', (req, res) => {
     try {
       const {
@@ -80,6 +241,9 @@ async function startServer() {
         primary_category,
         sub_category,
         referral_category,
+        custom_note,
+        is_custom,
+        custom_referral_id,
         priority,
       } = req.body;
 
@@ -90,6 +254,9 @@ async function startServer() {
         primary_category,
         sub_category,
         referral_category,
+        custom_note,
+        is_custom,
+        custom_referral_id,
         priority,
         existingReferralIds: store.referrals.map((r) => r.referral_id),
         isOffline: false,
@@ -99,10 +266,17 @@ async function startServer() {
       store.events = [...store.events, result.initialEvent];
       store.sms_logs = [result.smsMessage, ...store.sms_logs];
 
+      appendCloudLog(
+        result.referral.is_custom ? 'CUSTOM_REFERRAL' : 'CLOUD_PUSH',
+        `${result.referral.is_custom ? 'Custom referral' : 'Referral'} ${result.referral.referral_id} (${result.referral.patient_code}) created by ${result.referral.referring_facility}.`
+      );
+
       res.status(201).json({
         referral: result.referral,
         event: result.initialEvent,
         sms: result.smsMessage,
+        cloud_revision: store.cloud_revision,
+        cloud_logs: store.cloud_logs,
       });
     } catch (err) {
       res.status(400).json({
@@ -132,11 +306,18 @@ async function startServer() {
       store.sms_logs = [result.smsMessage, ...store.sms_logs];
       store.notifications = [result.notification, ...store.notifications];
 
+      appendCloudLog(
+        'CLOUD_PUSH',
+        `Status update synced to Cloud: ${referral_id} marked ${status} at ${facility_id}.`
+      );
+
       res.json({
         referral: result.updatedReferral,
         event: result.newEvent,
         sms: result.smsMessage,
         notification: result.notification,
+        cloud_revision: store.cloud_revision,
+        cloud_logs: store.cloud_logs,
       });
     } catch (err) {
       res.status(400).json({
@@ -164,7 +345,6 @@ async function startServer() {
         users?: UserAccount[];
       };
 
-      // Merge any client referrals not yet on server
       const refMap = new Map<string, Referral>();
       for (const r of store.referrals) {
         refMap.set(r.referral_id.toUpperCase(), { ...r, sync_status: 'Synced' });
@@ -172,15 +352,34 @@ async function startServer() {
       for (const r of referrals) {
         const key = r.referral_id.toUpperCase();
         const existing = refMap.get(key);
-        if (
-          !existing ||
-          Date.parse(r.last_updated_at) >= Date.parse(existing.last_updated_at)
-        ) {
+        if (!existing) {
           refMap.set(key, { ...r, sync_status: 'Synced' });
+        } else {
+          // Merge latest status update AND latest viewed timestamp
+          const clientUpdatedNewer =
+            Date.parse(r.last_updated_at) > Date.parse(existing.last_updated_at);
+          const mergedViewedAt = (() => {
+            const cView = r.last_viewed_by_referring_at
+              ? Date.parse(r.last_viewed_by_referring_at)
+              : 0;
+            const sView = existing.last_viewed_by_referring_at
+              ? Date.parse(existing.last_viewed_by_referring_at)
+              : 0;
+            const maxView = Math.max(cView, sView);
+            return maxView > 0
+              ? new Date(maxView).toISOString()
+              : existing.last_viewed_by_referring_at ||
+                  r.last_viewed_by_referring_at;
+          })();
+
+          refMap.set(key, {
+            ...(clientUpdatedNewer ? r : existing),
+            last_viewed_by_referring_at: mergedViewedAt,
+            sync_status: 'Synced',
+          });
         }
       }
 
-      // Merge client events idempotently
       const eventKeys = new Set<string>();
       const mergedEvents: StatusEvent[] = [];
       for (const e of [...store.events, ...events]) {
@@ -191,7 +390,6 @@ async function startServer() {
         }
       }
 
-      // Merge SMS logs
       const smsIds = new Set<string>();
       const mergedSms: SmsFallbackMessage[] = [];
       for (const s of [...sms_logs, ...store.sms_logs]) {
@@ -201,7 +399,6 @@ async function startServer() {
         }
       }
 
-      // Merge notifications (preserving read state if marked read on client)
       const notifMap = new Map<string, InAppNotification>();
       for (const n of store.notifications) {
         notifMap.set(n.notification_id, { ...n });
@@ -215,7 +412,6 @@ async function startServer() {
         }
       }
 
-      // Merge users
       const userMap = new Map<string, UserAccount>();
       for (const u of [...store.users, ...users]) {
         userMap.set(u.username.toLowerCase(), u);
@@ -232,12 +428,22 @@ async function startServer() {
       );
 
       store = {
+        ...store,
         referrals: syncResult.referrals,
         events: syncResult.events,
         sms_logs: syncResult.sms_logs,
         notifications: syncResult.notifications,
         users: Array.from(userMap.values()),
       };
+
+      if (queue.length > 0 || syncResult.syncedCount > 0) {
+        appendCloudLog(
+          'CLOUD_PUSH',
+          `Synchronized ${syncResult.syncedCount} offline event(s) with Cloud Hub (${syncResult.skippedDuplicates} duplicates prevented).`
+        );
+      } else {
+        saveStoreToDisk(store);
+      }
 
       res.json({
         ...store,
@@ -257,6 +463,7 @@ async function startServer() {
     try {
       const result = registerUserAccount(store.users, req.body);
       store.users = result.users;
+      saveStoreToDisk(store);
       res.status(201).json({ user: result.user });
     } catch (err) {
       res.status(400).json({
@@ -277,13 +484,9 @@ async function startServer() {
 
   // Reset to initial synthetic dataset
   app.post('/api/reset', (_req, res) => {
-    store = {
-      referrals: [...INITIAL_SYNTHETIC_REFERRALS],
-      events: [...INITIAL_SYNTHETIC_EVENTS],
-      sms_logs: [...INITIAL_SYNTHETIC_SMS_LOGS],
-      notifications: [...INITIAL_SYNTHETIC_NOTIFICATIONS],
-      users: [...INITIAL_DEMO_USERS],
-    };
+    store = getInitialStore();
+    saveStoreToDisk(store);
+    broadcastCloudUpdate();
     res.json({
       ...store,
       server_time: new Date().toISOString(),

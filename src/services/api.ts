@@ -1,6 +1,8 @@
-import {
+import type {
+  CloudSyncLogEntry,
   InAppNotification,
   Referral,
+  ReferralStatus,
   SmsFallbackMessage,
   StatusEvent,
   SyncQueueItem,
@@ -13,6 +15,8 @@ export interface ServerStateResponse {
   sms_logs: SmsFallbackMessage[];
   notifications: InAppNotification[];
   users: UserAccount[];
+  cloud_revision: number;
+  cloud_logs: CloudSyncLogEntry[];
   server_time: string;
 }
 
@@ -34,7 +38,9 @@ export async function postSyncBatchToServer(
   localSms: SmsFallbackMessage[],
   localNotifications: InAppNotification[],
   localUsers: UserAccount[]
-): Promise<ServerStateResponse & { syncedCount: number; skippedDuplicates: number }> {
+): Promise<
+  ServerStateResponse & { syncedCount: number; skippedDuplicates: number }
+> {
   const response = await fetch('/api/sync', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -49,6 +55,26 @@ export async function postSyncBatchToServer(
   });
   if (!response.ok) {
     throw new Error(`Failed to synchronize with server: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function postSimulateRemoteCloudUpdate(options?: {
+  referral_id?: string;
+  status?: ReferralStatus;
+}): Promise<
+  ServerStateResponse & {
+    updatedReferral: Referral;
+    cloudLog: CloudSyncLogEntry;
+  }
+> {
+  const response = await fetch('/api/cloud/simulate-remote-update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options || {}),
+  });
+  if (!response.ok) {
+    throw new Error(`Cloud remote update failed: ${response.status}`);
   }
   return response.json();
 }
