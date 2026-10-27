@@ -1,8 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
-  <rect width="512" height="512" rx="112" fill="#0F172A"/>
-  <path d="M144 256H224L256 176L296 336L328 256H368" stroke="#14B8A6" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M176 160C220 120 292 120 336 160" stroke="#F8FAFC" stroke-width="24" stroke-linecap="round"/>
-  <path d="M336 352C292 392 220 392 176 352" stroke="#F8FAFC" stroke-width="24" stroke-linecap="round"/>
-  <circle cx="144" cy="256" r="20" fill="#14B8A6"/>
-  <circle cx="368" cy="256" r="20" fill="#F8FAFC"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <linearGradient id="xareloopBg" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#031B4E"/>
+      <stop offset="100%" stop-color="#062B78"/>
+    </linearGradient>
+    <linearGradient id="xareloopLoop" x1="22" y1="30" x2="98" y2="90" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0878F9"/>
+      <stop offset="100%" stop-color="#10B9A8"/>
+    </linearGradient>
+  </defs>
+  <rect width="120" height="120" rx="28" fill="url(#xareloopBg)"/>
+  <!-- Xareloop infinity clinical referral loop -->
+  <path
+    d="M42 42C30.954 42 22 50.059 22 60C22 69.941 30.954 78 42 78C52.5 78 58.5 68 60 60C61.5 52 67.5 42 78 42C89.046 42 98 50.059 98 60C98 69.941 89.046 78 78 78C67.5 78 61.5 68 60 60C58.5 52 52.5 42 42 42Z"
+    stroke="url(#xareloopLoop)"
+    stroke-width="11"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <!-- Clinical cross accent in center -->
+  <circle cx="42" cy="60" r="5" fill="#FFFFFF"/>
+  <circle cx="78" cy="60" r="5" fill="#10B9A8"/>
 </svg>

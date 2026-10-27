@@ -1,6 +1,22 @@
 {
   "referrals": [
     {
+      "referral_id": "XL-1009",
+      "patient_code": "SYN-009",
+      "referring_facility": "PHC Demo North",
+      "receiving_facility": "District Hospital Demo",
+      "primary_category": "Obstetrics",
+      "sub_category": "High-Risk Pregnancy",
+      "referral_category": "Obstetrics — High-Risk Pregnancy",
+      "is_custom": false,
+      "priority": "Urgent",
+      "created_at": "2026-10-27T04:49:06.260Z",
+      "current_status": "Referred",
+      "last_updated_at": "2026-10-27T04:49:06.260Z",
+      "last_viewed_by_referring_at": "2026-10-27T04:49:06.260Z",
+      "sync_status": "Synced"
+    },
+    {
       "referral_id": "XL-1001",
       "patient_code": "SYN-001",
       "referring_facility": "PHC Demo North",
@@ -12,7 +28,7 @@
       "created_at": "2026-10-25T08:00:00.000Z",
       "current_status": "Back-referred",
       "last_updated_at": "2026-10-27T04:18:25.476Z",
-      "last_viewed_by_referring_at": "2026-10-25T08:05:00.000Z",
+      "last_viewed_by_referring_at": "2026-10-27T04:23:32.723Z",
       "sync_status": "Synced"
     },
     {
@@ -120,6 +136,21 @@
       "current_status": "Referred",
       "last_updated_at": "2026-10-26T11:13:38.664Z",
       "last_viewed_by_referring_at": "2026-10-26T11:13:38.664Z",
+      "sync_status": "Synced"
+    },
+    {
+      "referral_id": "XL-1008",
+      "patient_code": "SYN-008",
+      "referring_facility": "PHC Demo North",
+      "receiving_facility": "District Hospital Demo",
+      "primary_category": "General Referral",
+      "referral_category": "General Referral",
+      "is_custom": false,
+      "priority": "Urgent",
+      "created_at": "2026-10-27T04:36:41.164Z",
+      "current_status": "Seen",
+      "last_updated_at": "2026-10-27T04:39:52.141Z",
+      "last_viewed_by_referring_at": "2026-10-27T04:36:41.164Z",
       "sync_status": "Synced"
     }
   ],
@@ -363,61 +394,58 @@
       "status": "Back-referred",
       "timestamp": "2026-10-27T04:18:25.476Z",
       "sync_status": "Synced"
+    },
+    {
+      "event_id": "EVT-XL-1008-1-1793075801171",
+      "referral_id": "XL-1008",
+      "facility_id": "PHC Demo North",
+      "status": "Referred",
+      "timestamp": "2026-10-27T04:36:41.164Z",
+      "sync_status": "Synced"
+    },
+    {
+      "event_id": "EVT-XL-1008-SEEN-1793075992141",
+      "referral_id": "XL-1008",
+      "facility_id": "District Hospital Demo",
+      "status": "Seen",
+      "timestamp": "2026-10-27T04:39:52.141Z",
+      "sync_status": "Synced"
+    },
+    {
+      "event_id": "EVT-XL-1009-1-1793076546260",
+      "referral_id": "XL-1009",
+      "facility_id": "PHC Demo North",
+      "status": "Referred",
+      "timestamp": "2026-10-27T04:49:06.260Z",
+      "sync_status": "Synced"
     }
   ],
   "sms_logs": [
     {
-      "sms_id": "SMS-1001-2",
-      "referral_id": "XL-1001",
-      "facility_id": "District Hospital Demo",
-      "status": "Arrived",
-      "message": "Xareloop: Referral XL-1001 has been marked ARRIVED at District Hospital Demo.",
-      "timestamp": "2026-10-25T08:40:00.000Z",
+      "sms_id": "SMS-XL-1009-REFERRED-1793076546260",
+      "referral_id": "XL-1009",
+      "facility_id": "PHC Demo North",
+      "status": "Referred",
+      "message": "Xareloop: Referral XL-1009 has been marked REFERRED at PHC Demo North.",
+      "timestamp": "2026-10-27T04:49:06.260Z",
       "delivery_state": "Simulated sent"
     },
     {
-      "sms_id": "SMS-1001-5",
-      "referral_id": "XL-1001",
-      "facility_id": "District Hospital Demo",
-      "status": "Follow-up",
-      "message": "Xareloop: Referral XL-1001 has been marked FOLLOW-UP at District Hospital Demo.",
-      "timestamp": "2026-10-25T11:30:00.000Z",
-      "delivery_state": "Simulated sent"
-    },
-    {
-      "sms_id": "SMS-1002-4",
-      "referral_id": "XL-1002",
-      "facility_id": "Sub-District Hospital Demo",
-      "status": "Treated",
-      "message": "Xareloop: Referral XL-1002 has been marked TREATED at Sub-District Hospital Demo.",
-      "timestamp": "2026-10-25T11:00:00.000Z",
-      "delivery_state": "Simulated sent"
-    },
-    {
-      "sms_id": "SMS-1003-3",
-      "referral_id": "XL-1003",
+      "sms_id": "SMS-XL-1008-SEEN-1793075992141",
+      "referral_id": "XL-1008",
       "facility_id": "District Hospital Demo",
       "status": "Seen",
-      "message": "Xareloop: Referral XL-1003 has been marked SEEN at District Hospital Demo.",
-      "timestamp": "2026-10-25T10:42:00.000Z",
+      "message": "Xareloop: Referral XL-1008 has been marked SEEN at District Hospital Demo.",
+      "timestamp": "2026-10-27T04:39:52.141Z",
       "delivery_state": "Simulated sent"
     },
     {
-      "sms_id": "SMS-1004-2",
-      "referral_id": "XL-1004",
-      "facility_id": "CHC Demo Central",
-      "status": "Arrived",
-      "message": "Xareloop: Referral XL-1004 has been marked ARRIVED at CHC Demo Central.",
-      "timestamp": "2026-10-25T12:50:00.000Z",
-      "delivery_state": "Simulated sent"
-    },
-    {
-      "sms_id": "SMS-1006-5",
-      "referral_id": "XL-1006",
-      "facility_id": "Sub-District Hospital Demo",
-      "status": "Back-referred",
-      "message": "Xareloop: Referral XL-1006 has been marked BACK-REFERRED at Sub-District Hospital Demo.",
-      "timestamp": "2026-10-25T17:10:00.000Z",
+      "sms_id": "SMS-XL-1008-REFERRED-1793075801164",
+      "referral_id": "XL-1008",
+      "facility_id": "PHC Demo North",
+      "status": "Referred",
+      "message": "Xareloop: Referral XL-1008 has been marked REFERRED at PHC Demo North.",
+      "timestamp": "2026-10-27T04:36:41.164Z",
       "delivery_state": "Simulated sent"
     },
     {
@@ -502,6 +530,60 @@
       "delivery_state": "Simulated sent"
     },
     {
+      "sms_id": "SMS-1001-2",
+      "referral_id": "XL-1001",
+      "facility_id": "District Hospital Demo",
+      "status": "Arrived",
+      "message": "Xareloop: Referral XL-1001 has been marked ARRIVED at District Hospital Demo.",
+      "timestamp": "2026-10-25T08:40:00.000Z",
+      "delivery_state": "Simulated sent"
+    },
+    {
+      "sms_id": "SMS-1001-5",
+      "referral_id": "XL-1001",
+      "facility_id": "District Hospital Demo",
+      "status": "Follow-up",
+      "message": "Xareloop: Referral XL-1001 has been marked FOLLOW-UP at District Hospital Demo.",
+      "timestamp": "2026-10-25T11:30:00.000Z",
+      "delivery_state": "Simulated sent"
+    },
+    {
+      "sms_id": "SMS-1002-4",
+      "referral_id": "XL-1002",
+      "facility_id": "Sub-District Hospital Demo",
+      "status": "Treated",
+      "message": "Xareloop: Referral XL-1002 has been marked TREATED at Sub-District Hospital Demo.",
+      "timestamp": "2026-10-25T11:00:00.000Z",
+      "delivery_state": "Simulated sent"
+    },
+    {
+      "sms_id": "SMS-1003-3",
+      "referral_id": "XL-1003",
+      "facility_id": "District Hospital Demo",
+      "status": "Seen",
+      "message": "Xareloop: Referral XL-1003 has been marked SEEN at District Hospital Demo.",
+      "timestamp": "2026-10-25T10:42:00.000Z",
+      "delivery_state": "Simulated sent"
+    },
+    {
+      "sms_id": "SMS-1004-2",
+      "referral_id": "XL-1004",
+      "facility_id": "CHC Demo Central",
+      "status": "Arrived",
+      "message": "Xareloop: Referral XL-1004 has been marked ARRIVED at CHC Demo Central.",
+      "timestamp": "2026-10-25T12:50:00.000Z",
+      "delivery_state": "Simulated sent"
+    },
+    {
+      "sms_id": "SMS-1006-5",
+      "referral_id": "XL-1006",
+      "facility_id": "Sub-District Hospital Demo",
+      "status": "Back-referred",
+      "message": "Xareloop: Referral XL-1006 has been marked BACK-REFERRED at Sub-District Hospital Demo.",
+      "timestamp": "2026-10-25T17:10:00.000Z",
+      "delivery_state": "Simulated sent"
+    },
+    {
       "sms_id": "SMS-XL-1007-REFERRED-1793013218664",
       "referral_id": "XL-1007",
       "facility_id": "PHC Demo North",
@@ -522,7 +604,7 @@
       "title": "Referral XL-1001 marked Follow-up",
       "message": "District Hospital Demo updated SYN-001 (Obstetrics — High-Risk Pregnancy) to Follow-up.",
       "timestamp": "2026-10-25T11:30:00.000Z",
-      "read": false
+      "read": true
     },
     {
       "notification_id": "NOTIF-1002-4",
@@ -534,7 +616,7 @@
       "title": "Referral XL-1002 marked Treated",
       "message": "Sub-District Hospital Demo updated SYN-002 (Cardiology — Acute Chest Pain) to Treated.",
       "timestamp": "2026-10-25T11:00:00.000Z",
-      "read": false
+      "read": true
     },
     {
       "notification_id": "NOTIF-1003-3",
@@ -546,7 +628,7 @@
       "title": "Referral XL-1003 marked Seen",
       "message": "District Hospital Demo updated SYN-003 (Trauma & Surgical — Fracture / Orthopedic Injury) to Seen.",
       "timestamp": "2026-10-25T10:42:00.000Z",
-      "read": false
+      "read": true
     },
     {
       "notification_id": "NOTIF-1004-2",
@@ -570,7 +652,7 @@
       "title": "Referral XL-1006 marked Follow-up",
       "message": "Sub-District Hospital Demo updated SYN-006 (Maternal & Child Health — Neonatal Jaundice) to Follow-up.",
       "timestamp": "2026-10-26T12:20:07.656Z",
-      "read": false
+      "read": true
     },
     {
       "notification_id": "NOTIF-XL-1004-ARRIVED-1793017195917",
@@ -582,7 +664,7 @@
       "title": "Referral XL-1004 marked Arrived",
       "message": "CHC Demo Central updated SYN-004 (Acute Medical / Fever — Severe Dehydration) to Arrived.",
       "timestamp": "2026-10-26T12:19:55.917Z",
-      "read": false
+      "read": true
     },
     {
       "notification_id": "NOTIF-XL-1004-ARRIVED-1793017196917",
@@ -594,7 +676,7 @@
       "title": "Referral XL-1004 marked Arrived",
       "message": "CHC Demo Central updated SYN-004 (Acute Medical / Fever — Severe Dehydration) to Arrived.",
       "timestamp": "2026-10-26T12:19:56.917Z",
-      "read": false
+      "read": true
     },
     {
       "notification_id": "NOTIF-XL-1004-SEEN-1793017198208",
@@ -606,7 +688,7 @@
       "title": "Referral XL-1004 marked Seen",
       "message": "CHC Demo Central updated SYN-004 (Acute Medical / Fever — Severe Dehydration) to Seen.",
       "timestamp": "2026-10-26T12:19:58.208Z",
-      "read": false
+      "read": true
     },
     {
       "notification_id": "NOTIF-XL-1004-TREATED-1793017199208",
@@ -618,7 +700,7 @@
       "title": "Referral XL-1004 marked Treated",
       "message": "CHC Demo Central updated SYN-004 (Acute Medical / Fever — Severe Dehydration) to Treated.",
       "timestamp": "2026-10-26T12:19:59.208Z",
-      "read": false
+      "read": true
     },
     {
       "notification_id": "NOTIF-XL-1004-FOLLOW-UP-1793017200208",
@@ -630,7 +712,7 @@
       "title": "Referral XL-1004 marked Follow-up",
       "message": "CHC Demo Central updated SYN-004 (Acute Medical / Fever — Severe Dehydration) to Follow-up.",
       "timestamp": "2026-10-26T12:20:00.208Z",
-      "read": false
+      "read": true
     },
     {
       "notification_id": "NOTIF-XL-1004-BACK-REFERRED-1793017201208",
@@ -642,7 +724,7 @@
       "title": "Referral XL-1004 marked Back-referred",
       "message": "CHC Demo Central updated SYN-004 (Acute Medical / Fever — Severe Dehydration) to Back-referred.",
       "timestamp": "2026-10-26T12:20:01.208Z",
-      "read": false
+      "read": true
     },
     {
       "notification_id": "NOTIF-XL-1001-BACK-REFERRED-1793074705476",
@@ -654,6 +736,18 @@
       "title": "Referral XL-1001 marked Back-referred",
       "message": "District Hospital Demo updated SYN-001 (Obstetrics — High-Risk Pregnancy) to Back-referred.",
       "timestamp": "2026-10-27T04:18:25.476Z",
+      "read": true
+    },
+    {
+      "notification_id": "NOTIF-XL-1008-SEEN-1793075992141",
+      "referral_id": "XL-1008",
+      "patient_code": "SYN-008",
+      "target_facility": "PHC Demo North",
+      "actor_facility": "District Hospital Demo",
+      "status": "Seen",
+      "title": "Referral XL-1008 marked Seen",
+      "message": "District Hospital Demo updated SYN-008 (General Referral) to Seen.",
+      "timestamp": "2026-10-27T04:39:52.141Z",
       "read": false
     }
   ],
@@ -699,8 +793,15 @@
       "created_at": "2026-10-20T09:15:00.000Z"
     }
   ],
-  "cloud_revision": 1,
+  "cloud_revision": 2,
   "cloud_logs": [
+    {
+      "sync_id": "CLD-2-1793076546260",
+      "revision": 2,
+      "action": "CLOUD_PUSH",
+      "summary": "Referral XL-1009 (SYN-009) created by PHC Demo North.",
+      "timestamp": "2026-10-27T04:49:06.260Z"
+    },
     {
       "sync_id": "CLD-1001",
       "revision": 1,

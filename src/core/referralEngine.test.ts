@@ -427,3 +427,83 @@ test('16. Role-based access control enforces Referring Staff vs Receiving Staff 
   assert.equal(tampered.valid, false);
 });
 
+test('17. Haptic vibration feedback and QR patient detail synchronization work across local and imported QR payloads', async () => {
+  const {
+    getHapticVibrationPattern,
+    triggerHapticFeedback,
+    syncScannedQrPatientDetail,
+    validateXareloopQrPayload,
+    getValidNextStatuses,
+  } = await import('./referralEngine.ts');
+
+  assert.deepEqual(getHapticVibrationPattern('qr_scan'), [45, 35, 65]);
+  assert.equal(getHapticVibrationPattern('status_tap'), 35);
+
+  let vibratedWith: number | number[] | null = null;
+  const didVibrate = triggerHapticFeedback('qr_scan', (pattern) => {
+    vibratedWith = pattern;
+    return true;
+  });
+  assert.equal(didVibrate, true);
+  assert.deepEqual(vibratedWith, [45, 35, 65]);
+
+  // Existing referral QR payload syncs immediately
+  const samplePayload = buildReferralQrPayload(INITIAL_SYNTHETIC_REFERRALS[0]);
+  const existingSync = syncScannedQrPatientDetail(
+    INITIAL_SYNTHETIC_REFERRALS,
+    INITIAL_SYNTHETIC_EVENTS,
+    samplePayload,
+    false
+  );
+  assert.equal(existingSync.importedNewRecord, false);
+  assert.equal(existingSync.referral?.referral_id, 'XL-1001');
+  assert.equal(existingSync.referral?.patient_code, 'SYN-001');
+
+  // Offline-generated QR slip from another PHC imports and syncs patient detail
+  const remoteQrPayload = JSON.stringify({
+    protocol: 'XARELOOP_V1',
+    referral_id: 'XL-2048',
+    patient_code: 'SYN-011',
+    from: 'PHC Demo Valley',
+    to: 'District Hospital Demo',
+    category: 'Obstetrics — High-Risk Pregnancy',
+    priority: 'Emergency',
+    status: 'Referred',
+    updated_at: '2026-10-26T12:00:00.000Z',
+  });
+  const importedSync = syncScannedQrPatientDetail(
+    INITIAL_SYNTHETIC_REFERRALS,
+    INITIAL_SYNTHETIC_EVENTS,
+    remoteQrPayload,
+    false
+  );
+  assert.equal(importedSync.importedNewRecord, true);
+  assert.equal(importedSync.referral?.referral_id, 'XL-2048');
+  assert.equal(importedSync.referral?.patient_code, 'SYN-011');
+  assert.equal(
+    importedSync.referrals.length,
+    INITIAL_SYNTHETIC_REFERRALS.length + 1
+  );
+
+  // QR validation rejects unrelated external URLs and malformed JSON
+  assert.equal(validateXareloopQrPayload(remoteQrPayload).valid, true);
+  assert.equal(validateXareloopQrPayload('XL-1001').valid, true);
+  assert.equal(
+    validateXareloopQrPayload('https://example.com/menu').valid,
+    false
+  );
+  assert.equal(validateXareloopQrPayload('{broken-json').valid, false);
+  assert.equal(validateXareloopQrPayload('RANDOM_TEXT_123').valid, false);
+
+  // Workflow valid next status transitions
+  assert.deepEqual(getValidNextStatuses('Referred'), ['Arrived']);
+  assert.deepEqual(getValidNextStatuses('Arrived'), ['Seen']);
+  assert.deepEqual(getValidNextStatuses('Seen'), ['Treated']);
+  assert.deepEqual(getValidNextStatuses('Treated'), [
+    'Follow-up',
+    'Back-referred',
+  ]);
+  assert.deepEqual(getValidNextStatuses('Back-referred'), []);
+});
+
+

@@ -13,11 +13,13 @@ import {
 } from './src/data/syntheticData.ts';
 import {
   applyReferralStatusUpdate,
+  assertRolePermission,
   authenticateUser,
   buildEventIdempotencyKey,
   createReferralRecord,
   registerUserAccount,
   synchronizeOfflineQueue,
+  verifySessionToken,
 } from './src/core/referralEngine.ts';
 import type {
   CloudSyncLogEntry,
@@ -234,6 +236,27 @@ async function startServer() {
   // Create referral endpoint (standard or custom)
   app.post('/api/referrals', (req, res) => {
     try {
+      const authHeader = req.headers.authorization;
+      let actorUser: UserAccount | undefined;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.slice(7).trim();
+        const verified = verifySessionToken(token, store.users);
+        if (!verified.valid || !verified.user) {
+          res.status(401).json({ error: 'Invalid or expired staff session.' });
+          return;
+        }
+        actorUser = verified.user;
+        try {
+          assertRolePermission(actorUser, 'CREATE_REFERRAL');
+        } catch (permErr) {
+          res.status(403).json({
+            error:
+              permErr instanceof Error ? permErr.message : 'Permission denied',
+          });
+          return;
+        }
+      }
+
       const {
         patient_code,
         referring_facility,
@@ -260,6 +283,7 @@ async function startServer() {
         priority,
         existingReferralIds: store.referrals.map((r) => r.referral_id),
         isOffline: false,
+        actorUser,
       });
 
       store.referrals = [result.referral, ...store.referrals];
@@ -288,6 +312,27 @@ async function startServer() {
   // Update referral status endpoint
   app.post('/api/referrals/:id/status', (req, res) => {
     try {
+      const authHeader = req.headers.authorization;
+      let actorUser: UserAccount | undefined;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.slice(7).trim();
+        const verified = verifySessionToken(token, store.users);
+        if (!verified.valid || !verified.user) {
+          res.status(401).json({ error: 'Invalid or expired staff session.' });
+          return;
+        }
+        actorUser = verified.user;
+        try {
+          assertRolePermission(actorUser, 'UPDATE_STATUS');
+        } catch (permErr) {
+          res.status(403).json({
+            error:
+              permErr instanceof Error ? permErr.message : 'Permission denied',
+          });
+          return;
+        }
+      }
+
       const referral_id = req.params.id;
       const { facility_id, status, timestamp } = req.body;
 
@@ -299,6 +344,7 @@ async function startServer() {
         status,
         timestamp,
         isOffline: false,
+        actorUser,
       });
 
       store.referrals = result.referrals;
@@ -464,7 +510,11 @@ async function startServer() {
       const result = registerUserAccount(store.users, req.body);
       store.users = result.users;
       saveStoreToDisk(store);
-      res.status(201).json({ user: result.user });
+      res.status(201).json({
+        user: result.user,
+        token: result.token,
+        permissions: result.permissions,
+      });
     } catch (err) {
       res.status(400).json({
         error: err instanceof Error ? err.message : 'Registration failed',
@@ -479,7 +529,11 @@ async function startServer() {
       res.status(401).json({ error: result.error || 'Authentication failed' });
       return;
     }
-    res.json({ user: result.user });
+    res.json({
+      user: result.user,
+      token: result.token,
+      permissions: result.permissions,
+    });
   });
 
   // Reset to initial synthetic dataset

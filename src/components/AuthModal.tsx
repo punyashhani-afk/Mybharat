@@ -1,258 +1,208 @@
 import React, { useState } from 'react';
-import { Building2, Check, LogIn, UserPlus, X } from 'lucide-react';
-import { FacilityType, UserAccount } from '../types/referral';
+import { ShieldCheck, Lock, X, Building2, CheckCircle2 } from 'lucide-react';
+import type { FacilityType, UserAccount } from '../types/referral';
+import { getStaffRole } from '../core/referralEngine';
 import {
   RECEIVING_FACILITIES,
   REFERRING_FACILITIES,
 } from '../data/syntheticData';
 
 interface AuthModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  currentUser: UserAccount;
   users: UserAccount[];
-  onLogin: (username: string, password_mock: string) => {
-    authenticated: boolean;
-    error?: string;
-  };
-  onRegister: (input: {
+  currentUser: UserAccount;
+  onSelectUser: (user: UserAccount) => Promise<void>;
+  onRegisterUser: (input: {
     username: string;
     password_mock: string;
     display_name: string;
-    role_label: string;
     facility_type: FacilityType;
     facility_name: string;
-  }) => { ok: boolean; error?: string };
-  onSelectDemoUser: (user: UserAccount) => void;
+  }) => Promise<void>;
+  onClose: () => void;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
-  isOpen,
-  onClose,
-  currentUser,
   users,
-  onLogin,
-  onRegister,
-  onSelectDemoUser,
+  currentUser,
+  onSelectUser,
+  onRegisterUser,
+  onClose,
 }) => {
-  const [mode, setMode] = useState<'switch' | 'login' | 'register'>('switch');
-  const [loginUsername, setLoginUsername] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [regUsername, setRegUsername] = useState('');
-  const [regPassword, setRegPassword] = useState('');
-  const [regDisplayName, setRegDisplayName] = useState('');
-  const [regRoleLabel, setRegRoleLabel] = useState('');
-  const [regFacilityType, setRegFacilityType] =
-    useState<FacilityType>('referring');
-  const [regFacilityName, setRegFacilityName] = useState<string>(
+  const [tab, setTab] = useState<'switch' | 'register'>('switch');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('demo1234');
+  const [displayName, setDisplayName] = useState('');
+  const [facilityType, setFacilityType] = useState<FacilityType>('referring');
+  const [facilityName, setFacilityName] = useState<string>(
     REFERRING_FACILITIES[0]
   );
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  if (!isOpen) return null;
-
-  const handleFacilityTypeChange = (type: FacilityType) => {
-    setRegFacilityType(type);
-    setRegFacilityName(
-      type === 'referring' ? REFERRING_FACILITIES[0] : RECEIVING_FACILITIES[0]
-    );
-  };
-
-  const handleLoginSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    const res = onLogin(loginUsername, loginPassword);
-    if (!res.authenticated) {
-      setErrorMsg(res.error || 'Login failed.');
-    } else {
-      setSuccessMsg('Signed in successfully.');
-      setTimeout(() => {
-        onClose();
-      }, 300);
+  const handleQuickSwitch = async (user: UserAccount) => {
+    setLoading(true);
+    setError(null);
+    try {
+      await onSelectUser(user);
+      onClose();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Could not switch facility role.'
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    const res = onRegister({
-      username: regUsername,
-      password_mock: regPassword,
-      display_name: regDisplayName,
-      role_label:
-        regRoleLabel ||
-        (regFacilityType === 'referring'
-          ? 'Referring PHC Clinician'
-          : 'Receiving Triage Nurse'),
-      facility_type: regFacilityType,
-      facility_name: regFacilityName,
-    });
-    if (!res.ok) {
-      setErrorMsg(res.error || 'Registration failed.');
-    } else {
-      setSuccessMsg('Account registered and active.');
-      setTimeout(() => {
-        onClose();
-      }, 300);
+    setLoading(true);
+    setError(null);
+    try {
+      await onRegisterUser({
+        username,
+        password_mock: password,
+        display_name: displayName,
+        facility_type: facilityType,
+        facility_name: facilityName,
+      });
+      onClose();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Could not register account.'
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 overflow-y-auto"
+      data-testid="auth-modal"
+      className="fixed inset-0 z-50 bg-[#031B4E]/80 flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="auth-modal-title"
+      onClick={onClose}
     >
-      <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
-          <div>
-            <h2
-              id="auth-modal-title"
-              className="text-lg font-bold text-slate-900"
-            >
-              Facility Authentication & Role Session
-            </h2>
-            <p className="mt-0.5 text-xs text-slate-500">
-              Prototype authentication for Referring PHC/CHC and Receiving
-              Hospital workflows.
-            </p>
+      <div
+        className="bg-[#FFFFFF] rounded-2xl max-w-md w-full p-6 space-y-5 shadow-xl border-2 border-[#E2E8F0]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-3.5">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-[#062B78]" aria-hidden="true" />
+            <div>
+              <h3
+                id="auth-modal-title"
+                className="text-base font-extrabold text-[#031B4E]"
+              >
+                Facility Role & Staff Login
+              </h3>
+              <p className="text-xs font-semibold text-[#475569]">
+                Switch between Referring Facility and Receiving Facility roles
+              </p>
+            </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close authentication modal"
-            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900 min-h-[40px] min-w-[40px] flex items-center justify-center"
+            className="p-2 min-h-[40px] min-w-[40px] rounded-xl text-[#10213F] hover:bg-[#F7F9FC] border border-[#CBD5E1] flex items-center justify-center cursor-pointer"
+            aria-label="Close role and authentication modal"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Mode selector tabs */}
-        <div className="mt-4 flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+        <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#F7F9FC] border border-[#E2E8F0]">
           <button
             type="button"
             onClick={() => {
-              setMode('switch');
-              setErrorMsg(null);
-              setSuccessMsg(null);
+              setTab('switch');
+              setError(null);
             }}
-            className={`flex-1 rounded-md py-2 px-3 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 min-h-[40px] ${
-              mode === 'switch'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
+            className={`py-2 px-3 min-h-[40px] rounded-lg text-xs font-extrabold transition-colors cursor-pointer ${
+              tab === 'switch'
+                ? 'bg-[#062B78] text-[#FFFFFF]'
+                : 'text-[#10213F] hover:bg-[#E2E8F0]'
             }`}
           >
-            Demo Accounts
+            Demo Facility Accounts
           </button>
           <button
             type="button"
             onClick={() => {
-              setMode('login');
-              setErrorMsg(null);
-              setSuccessMsg(null);
+              setTab('register');
+              setError(null);
             }}
-            className={`flex-1 rounded-md py-2 px-3 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 min-h-[40px] ${
-              mode === 'login'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
+            className={`py-2 px-3 min-h-[40px] rounded-lg text-xs font-extrabold transition-colors cursor-pointer ${
+              tab === 'register'
+                ? 'bg-[#062B78] text-[#FFFFFF]'
+                : 'text-[#10213F] hover:bg-[#E2E8F0]'
             }`}
           >
-            Sign In
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setMode('register');
-              setErrorMsg(null);
-              setSuccessMsg(null);
-            }}
-            className={`flex-1 rounded-md py-2 px-3 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 min-h-[40px] ${
-              mode === 'register'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Register Facility User
+            Register New Staff
           </button>
         </div>
 
-        {errorMsg && (
-          <div
-            role="alert"
-            className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs font-medium text-red-800"
-          >
-            {errorMsg}
-          </div>
-        )}
-
-        {successMsg && (
-          <div
-            role="status"
-            className="mt-4 rounded-lg border border-teal-200 bg-teal-50 px-3.5 py-2.5 text-xs font-medium text-teal-900"
-          >
-            {successMsg}
-          </div>
-        )}
-
-        {mode === 'switch' && (
-          <div className="mt-4 space-y-2.5">
-            <p className="text-xs text-slate-600">
-              Select a pre-configured synthetic staff session to test Referring
-              or Receiving workflows (default password:{' '}
-              <span className="font-mono">demo1234</span>):
+        {tab === 'switch' ? (
+          <div className="space-y-3">
+            <p className="text-xs font-semibold text-[#475569]">
+              Select a facility account to test role-based permissions:
             </p>
-            <div className="divide-y divide-slate-200 rounded-lg border border-slate-200">
+            <div className="space-y-2.5">
               {users.map((u) => {
-                const isActive = u.username === currentUser.username;
+                const isCurrent = u.user_id === currentUser.user_id;
+                const role = getStaffRole(u);
+                const isReferring = u.facility_type === 'referring';
                 return (
                   <button
                     key={u.user_id}
                     type="button"
-                    onClick={() => {
-                      onSelectDemoUser(u);
-                      onClose();
-                    }}
-                    className={`w-full flex items-center justify-between gap-3 px-4 py-3 text-left transition-colors min-h-[56px] ${
-                      isActive ? 'bg-teal-50/70' : 'hover:bg-slate-50'
+                    disabled={loading}
+                    data-testid={`switch-user-${u.username}`}
+                    onClick={() => handleQuickSwitch(u)}
+                    className={`w-full text-left p-3.5 rounded-xl border-2 transition-all flex items-center justify-between gap-3 cursor-pointer ${
+                      isCurrent
+                        ? 'bg-[#DDF7F4] border-[#085E56]'
+                        : 'bg-[#FFFFFF] border-[#CBD5E1] hover:border-[#062B78] hover:bg-[#F7F9FC]'
                     }`}
                   >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-                        <Building2 className="w-4 h-4 text-teal-700 shrink-0" />
-                        <span className="truncate">{u.display_name}</span>
-                      </div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-                        <span className="font-mono">{u.username}</span>
-                        <span aria-hidden="true">·</span>
-                        <span className="font-medium text-slate-700">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-extrabold text-[#031B4E]">
                           {u.facility_name}
                         </span>
-                        <span aria-hidden="true">·</span>
                         <span
-                          className={
-                            u.facility_type === 'referring'
-                              ? 'text-teal-700 font-medium'
-                              : 'text-amber-700 font-medium'
-                          }
+                          className={`px-2 py-0.5 rounded text-[11px] font-extrabold ${
+                            isReferring
+                              ? 'bg-[#062B78] text-[#FFFFFF]'
+                              : 'bg-[#085E56] text-[#FFFFFF]'
+                          }`}
                         >
-                          {u.facility_type === 'referring'
+                          {isReferring
                             ? 'Referring Facility'
                             : 'Receiving Facility'}
                         </span>
                       </div>
+                      <p className="text-xs font-bold text-[#10213F]">
+                        {u.display_name} ({role})
+                      </p>
+                      <p className="text-[11px] font-medium text-[#475569]">
+                        {isReferring
+                          ? 'Can create referrals & view dashboards'
+                          : 'Can scan QR codes & update referral statuses'}
+                      </p>
                     </div>
-                    {isActive ? (
-                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-teal-800 shrink-0">
-                        <Check className="w-4 h-4" />
+
+                    {isCurrent ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-extrabold text-[#085E56] shrink-0">
+                        <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
                         Active
                       </span>
                     ) : (
-                      <span className="text-xs font-medium text-slate-600 shrink-0">
-                        Switch
+                      <span className="px-3 py-1.5 rounded-lg bg-[#062B78] text-[#FFFFFF] text-xs font-extrabold shrink-0">
+                        Sign In
                       </span>
                     )}
                   </button>
@@ -260,195 +210,133 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               })}
             </div>
           </div>
-        )}
-
-        {mode === 'login' && (
-          <form onSubmit={handleLoginSubmit} className="mt-4 space-y-4">
+        ) : (
+          <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
             <div>
               <label
-                htmlFor="login-username"
-                className="block text-xs font-semibold text-slate-700"
+                htmlFor="reg-role-select"
+                className="block text-xs font-extrabold text-[#10213F] mb-1"
               >
-                Username
+                Facility Role
               </label>
-              <input
-                id="login-username"
-                type="text"
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                placeholder="e.g. anm.north or triage.dh"
-                required
-                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-teal-700 focus:outline-none min-h-[44px]"
-              />
+              <select
+                id="reg-role-select"
+                value={facilityType}
+                onChange={(e) => {
+                  const nextType = e.target.value as FacilityType;
+                  setFacilityType(nextType);
+                  setFacilityName(
+                    nextType === 'referring'
+                      ? REFERRING_FACILITIES[0]
+                      : RECEIVING_FACILITIES[0]
+                  );
+                }}
+                className="w-full px-3.5 py-2.5 min-h-[44px] rounded-xl border border-[#94A3B8] text-xs font-bold text-[#10213F] bg-[#FFFFFF]"
+              >
+                <option value="referring">
+                  Referring Facility (Create Referrals)
+                </option>
+                <option value="receiving">
+                  Receiving Facility (Update Referral Statuses)
+                </option>
+              </select>
             </div>
+
             <div>
               <label
-                htmlFor="login-password"
-                className="block text-xs font-semibold text-slate-700"
+                htmlFor="reg-facility-input"
+                className="block text-xs font-extrabold text-[#10213F] mb-1"
               >
-                Password (Prototype Credential)
+                Facility Name
               </label>
-              <input
-                id="login-password"
-                type="password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="demo1234"
-                required
-                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-teal-700 focus:outline-none min-h-[44px]"
-              />
+              <div className="relative">
+                <Building2 className="w-4 h-4 text-[#475569] absolute left-3.5 top-3" aria-hidden="true" />
+                <input
+                  id="reg-facility-input"
+                  type="text"
+                  required
+                  value={facilityName}
+                  onChange={(e) => setFacilityName(e.target.value)}
+                  className="w-full pl-9 pr-3.5 py-2.5 min-h-[44px] rounded-xl border border-[#94A3B8] text-xs font-bold text-[#10213F]"
+                />
+              </div>
             </div>
-            <button
-              type="submit"
-              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 transition-colors min-h-[44px]"
-            >
-              <LogIn className="w-4 h-4" />
-              <span>Sign In to Facility Session</span>
-            </button>
-          </form>
-        )}
 
-        {mode === 'register' && (
-          <form onSubmit={handleRegisterSubmit} className="mt-4 space-y-3.5">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <div>
                 <label
-                  htmlFor="reg-username"
-                  className="block text-xs font-semibold text-slate-700"
+                  htmlFor="reg-username-input"
+                  className="block text-xs font-extrabold text-[#10213F] mb-1"
                 >
                   Username
                 </label>
                 <input
-                  id="reg-username"
+                  id="reg-username-input"
                   type="text"
-                  value={regUsername}
-                  onChange={(e) => setRegUsername(e.target.value)}
-                  placeholder="e.g. anm.valley"
                   required
-                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none min-h-[42px]"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="e.g. nurse.west"
+                  className="w-full px-3 py-2.5 min-h-[44px] rounded-xl border border-[#94A3B8] text-xs font-bold text-[#10213F]"
                 />
               </div>
+
               <div>
                 <label
-                  htmlFor="reg-password"
-                  className="block text-xs font-semibold text-slate-700"
+                  htmlFor="reg-password-input"
+                  className="block text-xs font-extrabold text-[#10213F] mb-1"
                 >
-                  Password
+                  Staff PIN / Password
                 </label>
-                <input
-                  id="reg-password"
-                  type="password"
-                  value={regPassword}
-                  onChange={(e) => setRegPassword(e.target.value)}
-                  placeholder="Min 4 chars"
-                  required
-                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none min-h-[42px]"
-                />
+                <div className="relative">
+                  <Lock className="w-3.5 h-3.5 text-[#475569] absolute left-3 top-3.5" aria-hidden="true" />
+                  <input
+                    id="reg-password-input"
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2.5 min-h-[44px] rounded-xl border border-[#94A3B8] text-xs font-mono font-bold text-[#10213F]"
+                  />
+                </div>
               </div>
             </div>
 
             <div>
               <label
-                htmlFor="reg-display-name"
-                className="block text-xs font-semibold text-slate-700"
+                htmlFor="reg-displayname-input"
+                className="block text-xs font-extrabold text-[#10213F] mb-1"
               >
-                Staff Display Label (Synthetic Role Only — No Real Names)
+                Staff Display Name
               </label>
               <input
-                id="reg-display-name"
+                id="reg-displayname-input"
                 type="text"
-                value={regDisplayName}
-                onChange={(e) => setRegDisplayName(e.target.value)}
-                placeholder="e.g. Duty Nurse — Valley PHC"
                 required
-                className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none min-h-[42px]"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="e.g. Duty Medical Officer"
+                className="w-full px-3.5 py-2.5 min-h-[44px] rounded-xl border border-[#94A3B8] text-xs font-bold text-[#10213F]"
               />
-            </div>
-
-            <div>
-              <span className="block text-xs font-semibold text-slate-700">
-                Facility Role Type
-              </span>
-              <div className="mt-1.5 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleFacilityTypeChange('referring')}
-                  className={`rounded-lg border px-3 py-2.5 text-xs font-semibold transition-colors min-h-[44px] ${
-                    regFacilityType === 'referring'
-                      ? 'border-teal-700 bg-teal-50 text-teal-900'
-                      : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  Referring PHC / CHC
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleFacilityTypeChange('receiving')}
-                  className={`rounded-lg border px-3 py-2.5 text-xs font-semibold transition-colors min-h-[44px] ${
-                    regFacilityType === 'receiving'
-                      ? 'border-teal-700 bg-teal-50 text-teal-900'
-                      : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  Receiving Facility
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label
-                  htmlFor="reg-facility-name"
-                  className="block text-xs font-semibold text-slate-700"
-                >
-                  Assigned Facility
-                </label>
-                <select
-                  id="reg-facility-name"
-                  value={regFacilityName}
-                  onChange={(e) => setRegFacilityName(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none min-h-[42px]"
-                >
-                  {(regFacilityType === 'referring'
-                    ? REFERRING_FACILITIES
-                    : RECEIVING_FACILITIES
-                  ).map((fac) => (
-                    <option key={fac} value={fac}>
-                      {fac}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label
-                  htmlFor="reg-role-label"
-                  className="block text-xs font-semibold text-slate-700"
-                >
-                  Role Title (Optional)
-                </label>
-                <input
-                  id="reg-role-label"
-                  type="text"
-                  value={regRoleLabel}
-                  onChange={(e) => setRegRoleLabel(e.target.value)}
-                  placeholder={
-                    regFacilityType === 'referring'
-                      ? 'Referring Clinician / ANM'
-                      : 'Receiving Triage Nurse'
-                  }
-                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-teal-700 focus:outline-none min-h-[42px]"
-                />
-              </div>
             </div>
 
             <button
               type="submit"
-              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-teal-800 transition-colors min-h-[44px]"
+              disabled={loading}
+              className="w-full py-3.5 px-4 min-h-[48px] rounded-xl bg-[#062B78] hover:bg-[#031B4E] text-[#FFFFFF] text-xs font-extrabold transition-colors cursor-pointer"
             >
-              <UserPlus className="w-4 h-4" />
-              <span>Register & Sign In</span>
+              {loading ? 'Registering…' : 'Register & Sign In'}
             </button>
           </form>
+        )}
+
+        {error && (
+          <p
+            role="alert"
+            className="text-xs font-bold text-[#991B1B] bg-[#FEF2F2] px-3.5 py-2.5 rounded-xl border border-[#DC2626]"
+          >
+            ! {error}
+          </p>
         )}
       </div>
     </div>

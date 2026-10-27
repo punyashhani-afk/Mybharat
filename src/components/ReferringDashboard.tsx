@@ -1,261 +1,491 @@
-import React from 'react';
-import { BellRing, Lock, Plus, QrCode, X } from 'lucide-react';
+import React, { useState } from 'react';
 import {
+  Plus,
+  QrCode,
+  Bell,
+  X,
+  ArrowRight,
+  Building2,
+  Clock,
+  Inbox,
+  ShieldCheck,
+  ScanLine,
+} from 'lucide-react';
+import type {
   InAppNotification,
   Referral,
-  RolePermissions,
   StatusEvent,
+  UserAccount,
 } from '../types/referral';
-import {
-  getReferralTimeline,
-  hasUnseenStatusUpdate,
-} from '../core/referralEngine';
+import { hasUnseenStatusUpdate, getStaffRole } from '../core/referralEngine';
 import {
   formatShortTimestamp,
-  ReferralTimelineCard,
+  PriorityBadge,
+  StatusBadge,
+  SyncStateBadge,
 } from './ReferralTimelineCard';
 
 interface ReferringDashboardProps {
+  currentUser: UserAccount;
   referrals: Referral[];
   events: StatusEvent[];
+  pendingSyncCount: number;
+  canCreateReferrals: boolean;
+  canUpdateStatus: boolean;
   notifications: InAppNotification[];
-  permissions: RolePermissions;
-  selectedReferralId: string;
-  onSelectReferral: (referralId: string, markViewed?: boolean) => void;
   onCreateNewClick: () => void;
-  onViewQr: (referral: Referral) => void;
-  onMarkNotificationRead: (notificationId: string) => void;
-  onSwitchToReferringStaff: () => void;
-  onGoToScanUpdate: () => void;
+  onOpenScannerClick: () => void;
+  onViewReferral: (referral: Referral) => void;
+  onShowQrModal: (referral: Referral) => void;
+  onDismissNotification: (notificationId: string) => void;
+  onOpenAuthModal: () => void;
 }
 
+type FilterOption = 'ALL' | 'UNSEEN' | 'EMERGENCY' | 'AWAITING_ARRIVAL' | 'FOLLOW_UP';
+
 export const ReferringDashboard: React.FC<ReferringDashboardProps> = ({
+  currentUser,
   referrals,
-  events,
+  pendingSyncCount,
+  canCreateReferrals,
   notifications,
-  permissions,
-  selectedReferralId,
-  onSelectReferral,
   onCreateNewClick,
-  onViewQr,
-  onMarkNotificationRead,
-  onSwitchToReferringStaff,
-  onGoToScanUpdate,
+  onOpenScannerClick,
+  onViewReferral,
+  onShowQrModal,
+  onDismissNotification,
+  onOpenAuthModal,
 }) => {
-  // Enforce RBAC: Only Referring Staff can view dashboards and create referrals
-  if (!permissions.canViewDashboard) {
-    return (
-      <div
-        role="region"
-        aria-label="Referring Staff Permission Required"
-        data-testid="referring-dashboard-role-guard"
-        className="mx-auto max-w-md rounded-2xl border border-slate-200 bg-white p-7 text-center shadow-xs space-y-4"
-      >
-        <div className="mx-auto w-11 h-11 rounded-xl bg-teal-50 border border-teal-200/80 flex items-center justify-center">
-          <Lock className="w-5 h-5 text-teal-800" />
-        </div>
-        <div className="space-y-1">
-          <h1 className="text-lg font-bold text-slate-900">
-            Referring Staff Access Only
-          </h1>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            You are signed in as <strong>Receiving Staff</strong>, who can scan
-            QR codes and update referral statuses. Switch to{' '}
-            <strong>Referring Staff</strong> to view the referring dashboard or
-            create referrals.
-          </p>
-        </div>
-        <div className="flex flex-col sm:flex-row gap-2.5 pt-1">
-          <button
-            type="button"
-            data-testid="go-to-scan-update-btn"
-            onClick={onGoToScanUpdate}
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#0B5E5E] to-[#0F766E] px-4 py-3 text-xs font-bold text-white shadow-xs hover:from-[#094D4D] hover:to-[#0D655E] transition-all min-h-[44px]"
-          >
-            <QrCode className="w-4 h-4" />
-            <span>Open Scan / Update</span>
-          </button>
-          <button
-            type="button"
-            data-testid="switch-to-referring-staff-btn"
-            onClick={onSwitchToReferringStaff}
-            className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-3 text-xs font-bold text-slate-800 hover:bg-slate-50 transition-colors min-h-[44px]"
-          >
-            Switch to Referring Staff
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const [filter, setFilter] = useState<FilterOption>('ALL');
 
-  const selectedReferral =
-    referrals.find((r) => r.referral_id === selectedReferralId) ||
-    referrals[0] ||
-    null;
+  const role = getStaffRole(currentUser);
+  const isReferringRole = currentUser.facility_type === 'referring';
 
-  const selectedTimeline = selectedReferral
-    ? getReferralTimeline(events, selectedReferral.referral_id)
-    : [];
+  // Summary card counts
+  const activeCount = referrals.length;
+  const awaitingArrivalCount = referrals.filter(
+    (r) => r.current_status === 'Referred'
+  ).length;
+  const seenCount = referrals.filter(
+    (r) => r.current_status === 'Seen' || r.current_status === 'Treated'
+  ).length;
+  const followUpDueCount = referrals.filter(
+    (r) => r.current_status === 'Follow-up'
+  ).length;
 
-  const unreadAlerts = notifications.filter((n) => !n.read);
-  const latestAlert = unreadAlerts[0] || null;
+  const unreadNotifications = notifications.filter((n) => !n.read);
+
+  const filteredReferrals = referrals.filter((r) => {
+    if (filter === 'UNSEEN') return hasUnseenStatusUpdate(r);
+    if (filter === 'EMERGENCY') return r.priority === 'Emergency';
+    if (filter === 'AWAITING_ARRIVAL') return r.current_status === 'Referred';
+    if (filter === 'FOLLOW_UP')
+      return (
+        r.current_status === 'Follow-up' || r.current_status === 'Back-referred'
+      );
+    return true;
+  });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
-      {/* Top Action Row: Heading + Primary New Referral Action */}
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900">
-            Active Referrals
-          </h1>
-          <p className="text-xs text-slate-500">
-            Tap any referral card to view its timeline or QR code
-          </p>
-        </div>
-
-        <button
-          type="button"
-          onClick={onCreateNewClick}
-          className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#0B5E5E] to-[#0F766E] px-5 py-3 text-sm font-bold text-white shadow-xs hover:from-[#094D4D] hover:to-[#0D655E] transition-all min-h-[48px]"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Referral</span>
-        </button>
-      </div>
-
-      {/* In-App Notification Visual Alert when a referral status is updated by a receiving facility */}
-      {latestAlert && (
-        <div
-          role="status"
-          data-testid="dashboard-notification-alert"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-teal-300/90 bg-teal-50/90 px-4 py-3 text-xs text-teal-950 shadow-2xs"
-        >
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-teal-700 text-white">
-              <BellRing className="w-3.5 h-3.5" />
-            </span>
-            <div className="min-w-0">
-              <div className="font-bold text-teal-950">
-                Status Update Alert: {latestAlert.referral_id} (
-                {latestAlert.patient_code}) marked {latestAlert.status}
-              </div>
-              <div className="text-teal-800 truncate">
-                Updated by {latestAlert.actor_facility} ·{' '}
-                {formatShortTimestamp(latestAlert.timestamp)}
-                {unreadAlerts.length > 1
-                  ? ` (+${unreadAlerts.length - 1} more unread)`
-                  : ''}
-              </div>
+    <div className="space-y-5">
+      {/* Top Facility Greeting & Role Identification Card */}
+      <section
+        data-testid="dashboard-greeting-card"
+        className="bg-[#FFFFFF] rounded-2xl border border-[#E2E8F0] p-5 shadow-xs space-y-4"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-[#DDF7F4] border border-[#085E56] text-[#031B4E] text-xs font-extrabold">
+              <ShieldCheck className="w-3.5 h-3.5 text-[#085E56]" aria-hidden="true" />
+              <span data-testid="current-role-badge">
+                {isReferringRole ? 'Referring Facility' : 'Receiving Facility'} •{' '}
+                {role}
+              </span>
             </div>
+            <h1
+              data-testid="dashboard-facility-greeting"
+              className="text-xl sm:text-2xl font-extrabold text-[#031B4E] tracking-tight pt-1"
+            >
+              Good morning, {currentUser.facility_name}
+            </h1>
+            <p className="text-xs font-semibold text-[#475569]">
+              Create → Refer → Arrive → Seen → Treated → Follow-up
+            </p>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={onOpenAuthModal}
+            data-testid="dashboard-switch-role-btn"
+            className="px-3.5 py-2 min-h-[40px] rounded-xl border border-[#062B78] bg-[#F7F9FC] hover:bg-[#EFF6FF] text-[#062B78] text-xs font-extrabold transition-colors cursor-pointer"
+          >
+            Switch Role / Facility
+          </button>
+        </div>
+
+        {/* Role-aware Primary Action Button */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+          {canCreateReferrals ? (
             <button
               type="button"
-              onClick={() => {
-                onSelectReferral(latestAlert.referral_id, true);
-                onMarkNotificationRead(latestAlert.notification_id);
-              }}
-              className="rounded-lg bg-teal-800 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-900 transition-colors min-h-[34px]"
+              onClick={onCreateNewClick}
+              data-testid="new-referral-button"
+              className="w-full py-3.5 px-5 min-h-[48px] rounded-xl bg-[#062B78] hover:bg-[#031B4E] text-[#FFFFFF] font-extrabold text-sm shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
-              View
+              <Plus className="w-5 h-5 text-[#10B9A8]" strokeWidth={2.75} aria-hidden="true" />
+              <span>New Referral</span>
             </button>
+          ) : (
             <button
               type="button"
-              aria-label="Dismiss notification alert"
-              onClick={() => onMarkNotificationRead(latestAlert.notification_id)}
-              className="rounded-lg p-1.5 text-teal-800 hover:bg-teal-100 transition-colors min-h-[34px] min-w-[34px] flex items-center justify-center"
+              onClick={onOpenAuthModal}
+              data-testid="role-create-restricted-banner"
+              className="w-full py-3 px-4 min-h-[48px] rounded-xl bg-[#F7F9FC] border border-[#94A3B8] text-[#10213F] text-xs font-extrabold flex items-center justify-center gap-2 hover:bg-[#E2E8F0] transition-colors cursor-pointer"
             >
-              <X className="w-4 h-4" />
+              <span>Receiving Role Active — Switch to Referring Facility to Create</span>
             </button>
+          )}
+
+          <button
+            type="button"
+            onClick={onOpenScannerClick}
+            data-testid="dashboard-scan-qr-cta"
+            className="w-full py-3.5 px-5 min-h-[48px] rounded-xl border-2 border-[#062B78] bg-[#FFFFFF] hover:bg-[#EFF6FF] text-[#062B78] font-extrabold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
+          >
+            <ScanLine className="w-5 h-5 text-[#0878F9]" aria-hidden="true" />
+            <span>Scan QR / Lookup Referral</span>
+          </button>
+        </div>
+      </section>
+
+      {/* 5 Useful Summary Cards */}
+      <section aria-label="Referral Summary Metrics">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+          <button
+            type="button"
+            onClick={() => setFilter('ALL')}
+            data-testid="summary-active-referrals"
+            className={`text-left p-3.5 rounded-xl border transition-all cursor-pointer ${
+              filter === 'ALL'
+                ? 'bg-[#FFFFFF] border-2 border-[#062B78] shadow-xs'
+                : 'bg-[#FFFFFF] border-[#E2E8F0] hover:border-[#94A3B8]'
+            }`}
+          >
+            <span className="block text-[11px] font-extrabold uppercase tracking-wider text-[#475569]">
+              Active Referrals
+            </span>
+            <span className="mt-1 block text-2xl font-mono font-extrabold text-[#031B4E] tabular-nums">
+              {activeCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setFilter('AWAITING_ARRIVAL')}
+            data-testid="summary-awaiting-arrival"
+            className={`text-left p-3.5 rounded-xl border transition-all cursor-pointer ${
+              filter === 'AWAITING_ARRIVAL'
+                ? 'bg-[#FFFFFF] border-2 border-[#062B78] shadow-xs'
+                : 'bg-[#FFFFFF] border-[#E2E8F0] hover:border-[#94A3B8]'
+            }`}
+          >
+            <span className="block text-[11px] font-extrabold uppercase tracking-wider text-[#475569]">
+              Awaiting Arrival
+            </span>
+            <span className="mt-1 block text-2xl font-mono font-extrabold text-[#062B78] tabular-nums">
+              {awaitingArrivalCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setFilter('ALL')}
+            data-testid="summary-seen"
+            className="text-left p-3.5 rounded-xl bg-[#FFFFFF] border border-[#E2E8F0] hover:border-[#94A3B8] transition-all cursor-pointer"
+          >
+            <span className="block text-[11px] font-extrabold uppercase tracking-wider text-[#475569]">
+              Seen / Treated
+            </span>
+            <span className="mt-1 block text-2xl font-mono font-extrabold text-[#085E56] tabular-nums">
+              {seenCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setFilter('FOLLOW_UP')}
+            data-testid="summary-followup-due"
+            className={`text-left p-3.5 rounded-xl border transition-all cursor-pointer ${
+              filter === 'FOLLOW_UP'
+                ? 'bg-[#FFFFFF] border-2 border-[#062B78] shadow-xs'
+                : 'bg-[#FFFFFF] border-[#E2E8F0] hover:border-[#94A3B8]'
+            }`}
+          >
+            <span className="block text-[11px] font-extrabold uppercase tracking-wider text-[#475569]">
+              Follow-up Due
+            </span>
+            <span className="mt-1 block text-2xl font-mono font-extrabold text-[#78350F] tabular-nums">
+              {followUpDueCount}
+            </span>
+          </button>
+
+          <div
+            data-testid="summary-pending-sync"
+            className={`col-span-2 sm:col-span-1 p-3.5 rounded-xl border ${
+              pendingSyncCount > 0
+                ? 'bg-[#FEF3C7] border-[#D97706]'
+                : 'bg-[#DDF7F4]/70 border-[#085E56]'
+            }`}
+          >
+            <span className="block text-[11px] font-extrabold uppercase tracking-wider text-[#031B4E]">
+              Pending Sync
+            </span>
+            <span className="mt-1 block text-2xl font-mono font-extrabold text-[#031B4E] tabular-nums">
+              {pendingSyncCount}
+            </span>
           </div>
         </div>
-      )}
+      </section>
 
-      {/* Simple Active Referral Cards */}
-      <div className="space-y-3">
-        {referrals.map((ref) => {
-          const isSelected = selectedReferral?.referral_id === ref.referral_id;
-          const isUnseen = hasUnseenStatusUpdate(ref);
-
-          return (
-            <div key={ref.referral_id} className="space-y-2.5">
-              <button
-                type="button"
-                data-testid={`referral-row-${ref.referral_id}`}
-                data-unseen-update={isUnseen ? 'true' : 'false'}
-                onClick={() => onSelectReferral(ref.referral_id, true)}
-                className={`w-full text-left rounded-xl border p-4 transition-all ${
-                  isSelected
-                    ? 'border-teal-700 bg-teal-50/35 shadow-xs'
-                    : isUnseen
-                      ? 'border-amber-300 bg-amber-50/40 hover:bg-amber-50/70'
-                      : 'border-slate-200/90 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03)] hover:border-slate-300 hover:bg-slate-50/60'
-                }`}
+      {/* In-App Notifications Section */}
+      {unreadNotifications.length > 0 && (
+        <section
+          aria-label="Referral Status Update Notifications"
+          className="space-y-2"
+        >
+          {unreadNotifications.slice(0, 3).map((notif) => {
+            const matchedReferral = referrals.find(
+              (r) =>
+                r.referral_id.toUpperCase() === notif.referral_id.toUpperCase()
+            );
+            return (
+              <div
+                key={notif.notification_id}
+                data-testid={`notification-alert-${notif.referral_id}`}
+                className="p-4 rounded-2xl bg-[#DDF7F4] border-2 border-[#085E56] text-[#031B4E] shadow-xs flex flex-wrap items-center justify-between gap-3"
               >
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-center">
-                  <div>
-                    <div className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                      Patient Code
-                    </div>
-                    <div className="mt-0.5 font-mono text-base font-bold text-slate-900">
-                      {ref.patient_code}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                      Referral ID
-                    </div>
-                    <div className="mt-0.5 font-mono text-base font-bold text-teal-800">
-                      {ref.referral_id}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                      Current Status
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-1.5">
-                      <span className="text-sm font-bold text-slate-900">
-                        {ref.current_status}
+                <div className="flex items-start gap-3">
+                  <span className="w-8 h-8 rounded-xl bg-[#062B78] text-[#FFFFFF] flex items-center justify-center shrink-0 mt-0.5">
+                    <Bell className="w-4 h-4 text-[#10B9A8]" aria-hidden="true" />
+                  </span>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-[#062B78]">
+                        Referral update
                       </span>
-                      {isUnseen && (
-                        <span
-                          className="inline-block w-2 h-2 rounded-full bg-amber-500"
-                          title="Updated since last viewed"
-                        />
-                      )}
+                      <SyncStateBadge
+                        syncStatus={matchedReferral?.sync_status || 'Synced'}
+                      />
                     </div>
-                  </div>
-
-                  <div className="sm:text-right">
-                    <div className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                      Last Updated
-                    </div>
-                    <div className="mt-0.5 font-mono text-xs font-medium text-slate-700 tabular-nums">
-                      {formatShortTimestamp(ref.last_updated_at)}
-                    </div>
-                    {ref.sync_status === 'Saved offline' && (
-                      <div className="text-xs font-semibold text-amber-700">
-                        Saved offline
-                      </div>
-                    )}
+                    <p className="text-sm font-extrabold text-[#031B4E]">
+                      {notif.referral_id} was marked{' '}
+                      <span className="underline decoration-[#085E56]">
+                        {notif.status.toUpperCase()}
+                      </span>
+                      .
+                    </p>
+                    <p className="text-xs font-bold text-[#10213F]">
+                      {notif.actor_facility} •{' '}
+                      <span className="font-mono text-[#475569]">
+                        {formatShortTimestamp(notif.timestamp)}
+                      </span>
+                    </p>
                   </div>
                 </div>
-              </button>
 
-              {isSelected && (
-                <ReferralTimelineCard
-                  referral={ref}
-                  events={selectedTimeline}
-                  onViewQr={onViewQr}
-                />
-              )}
-            </div>
-          );
-        })}
+                <div className="flex items-center gap-2">
+                  {matchedReferral && (
+                    <button
+                      type="button"
+                      onClick={() => onViewReferral(matchedReferral)}
+                      className="px-3 py-1.5 min-h-[38px] rounded-xl bg-[#062B78] text-[#FFFFFF] text-xs font-extrabold hover:bg-[#031B4E] cursor-pointer"
+                    >
+                      View {notif.referral_id}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onDismissNotification(notif.notification_id)}
+                    className="p-2 min-h-[38px] min-w-[38px] rounded-xl text-[#031B4E] hover:bg-[#c5f0eb] flex items-center justify-center cursor-pointer"
+                    aria-label={`Dismiss notification for ${notif.referral_id}`}
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      )}
+
+      {/* Recent Referrals Header & Filter Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+        <h2 className="text-sm font-extrabold uppercase tracking-wider text-[#031B4E]">
+          Recent Referrals ({filteredReferrals.length})
+        </h2>
+
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {(
+            [
+              { id: 'ALL', label: 'All' },
+              { id: 'UNSEEN', label: '! New Updates' },
+              { id: 'EMERGENCY', label: '! Emergency' },
+              { id: 'AWAITING_ARRIVAL', label: 'Awaiting Arrival' },
+              { id: 'FOLLOW_UP', label: 'Follow-up' },
+            ] as { id: FilterOption; label: string }[]
+          ).map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setFilter(tab.id)}
+              className={`px-3 py-1.5 min-h-[36px] rounded-lg text-xs font-extrabold border transition-colors cursor-pointer ${
+                filter === tab.id
+                  ? 'bg-[#062B78] text-[#FFFFFF] border-[#031B4E]'
+                  : 'bg-[#FFFFFF] text-[#10213F] border-[#CBD5E1] hover:bg-[#F7F9FC]'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {/* Empty State */}
+      {filteredReferrals.length === 0 ? (
+        <div
+          data-testid="empty-referrals-state"
+          className="bg-[#FFFFFF] rounded-2xl border border-[#E2E8F0] p-8 text-center space-y-3"
+        >
+          <div className="w-12 h-12 rounded-2xl bg-[#F7F9FC] border border-[#CBD5E1] flex items-center justify-center mx-auto">
+            <Inbox className="w-6 h-6 text-[#062B78]" aria-hidden="true" />
+          </div>
+          <h3 className="text-base font-extrabold text-[#031B4E]">
+            No active referrals
+          </h3>
+          <p className="text-xs font-medium text-[#475569] max-w-sm mx-auto">
+            New referrals created by this facility will appear here.
+          </p>
+          <div className="flex items-center justify-center gap-2 pt-2">
+            {filter !== 'ALL' && (
+              <button
+                type="button"
+                onClick={() => setFilter('ALL')}
+                className="px-4 py-2.5 min-h-[44px] rounded-xl border border-[#062B78] text-[#062B78] text-xs font-extrabold hover:bg-[#EFF6FF] cursor-pointer"
+              >
+                Show All Referrals
+              </button>
+            )}
+            {canCreateReferrals && (
+              <button
+                type="button"
+                onClick={onCreateNewClick}
+                className="px-4 py-2.5 min-h-[44px] rounded-xl bg-[#062B78] text-[#FFFFFF] text-xs font-extrabold hover:bg-[#031B4E] cursor-pointer"
+              >
+                + Create Referral
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        /* Recent Referrals Card List */
+        <div className="space-y-3">
+          {filteredReferrals.map((referral) => {
+            const isUnseen = hasUnseenStatusUpdate(referral);
+
+            return (
+              <article
+                key={referral.referral_id}
+                data-testid={`referral-row-${referral.referral_id}`}
+                className={`bg-[#FFFFFF] rounded-2xl border p-4 sm:p-5 transition-all space-y-3.5 shadow-xs ${
+                  isUnseen
+                    ? 'border-2 border-[#0878F9] ring-2 ring-[#0878F9]/15'
+                    : 'border-[#E2E8F0] hover:border-[#94A3B8]'
+                }`}
+              >
+                {/* Top Row: Referral ID, Synthetic Patient ID, Priority, Current Status */}
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-base font-mono font-extrabold text-[#062B78] bg-[#F7F9FC] px-3 py-1 rounded-lg border border-[#CBD5E1]">
+                      {referral.referral_id}
+                    </span>
+
+                    <span className="text-sm font-mono font-extrabold text-[#10213F]">
+                      Patient: {referral.patient_code}
+                    </span>
+
+                    <PriorityBadge priority={referral.priority} />
+
+                    {isUnseen && (
+                      <span
+                        data-testid={`unseen-badge-${referral.referral_id}`}
+                        className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-extrabold bg-[#062B78] text-[#FFFFFF]"
+                      >
+                        ! NEW UPDATE
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <StatusBadge status={referral.current_status} />
+                    <SyncStateBadge syncStatus={referral.sync_status} />
+                  </div>
+                </div>
+
+                {/* Middle Row: Referring Facility → Receiving Facility & Category */}
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs bg-[#F7F9FC] px-3.5 py-2.5 rounded-xl border border-[#E2E8F0]">
+                  <div className="flex items-center gap-1.5 font-bold text-[#10213F] flex-wrap">
+                    <Building2 className="w-3.5 h-3.5 text-[#062B78] shrink-0" aria-hidden="true" />
+                    <span>{referral.referring_facility}</span>
+                    <span className="text-[#0878F9] font-extrabold">→</span>
+                    <span className="font-extrabold text-[#031B4E]">
+                      {referral.receiving_facility}
+                    </span>
+                  </div>
+
+                  <span className="font-bold text-[#475569]">
+                    {referral.referral_category}
+                  </span>
+                </div>
+
+                {/* Bottom Row: Last Updated Time & Clear "View Referral" Action */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-[#475569]">
+                    <Clock className="w-3.5 h-3.5 text-[#062B78] shrink-0" aria-hidden="true" />
+                    <span>
+                      Last updated:{' '}
+                      <strong className="font-mono text-[#10213F]">
+                        {formatShortTimestamp(referral.last_updated_at)}
+                      </strong>
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onShowQrModal(referral)}
+                      data-testid={`show-qr-${referral.referral_id}`}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-[#062B78] bg-[#FFFFFF] text-xs font-extrabold text-[#062B78] hover:bg-[#EFF6FF] transition-colors cursor-pointer"
+                    >
+                      <QrCode className="w-3.5 h-3.5 text-[#0878F9]" aria-hidden="true" />
+                      <span>Show QR</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onViewReferral(referral)}
+                      data-testid={`view-referral-${referral.referral_id}`}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[40px] rounded-xl bg-[#062B78] hover:bg-[#031B4E] text-[#FFFFFF] text-xs font-extrabold transition-colors cursor-pointer"
+                    >
+                      <span>View Referral</span>
+                      <ArrowRight className="w-3.5 h-3.5 text-[#10B9A8]" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

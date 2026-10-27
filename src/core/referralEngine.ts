@@ -206,13 +206,25 @@ export function generateNextSyntheticPatientCode(
 }
 
 /**
- * Encodes referral payload for QR code generation and scanning.
+ * Encodes referral & synthetic patient detail payload for QR code generation and scanning.
  */
 export function buildReferralQrPayload(
   referral: Pick<
     Referral,
     'referral_id' | 'patient_code' | 'referring_facility' | 'receiving_facility'
-  >
+  > &
+    Partial<
+      Pick<
+        Referral,
+        | 'primary_category'
+        | 'sub_category'
+        | 'referral_category'
+        | 'priority'
+        | 'current_status'
+        | 'created_at'
+        | 'last_updated_at'
+      >
+    >
 ): string {
   return JSON.stringify({
     protocol: 'XARELOOP_V1',
@@ -220,11 +232,19 @@ export function buildReferralQrPayload(
     patient_code: referral.patient_code,
     from: referral.referring_facility,
     to: referral.receiving_facility,
+    category:
+      referral.referral_category ||
+      referral.primary_category ||
+      'General Referral',
+    priority: referral.priority || 'Urgent',
+    status: referral.current_status || 'Referred',
+    updated_at: referral.last_updated_at || referral.created_at,
   });
 }
 
 /**
- * Parses either a raw short referral ID ("XL-1001"), a URL containing ?ref=XL-1001, or a JSON QR payload.
+ * Parses either a raw short referral ID ("XL-1001"), a synthetic patient code ("SYN-001"),
+ * a URL containing ?ref=XL-1001, or a JSON QR payload.
  */
 export function parseReferralLookupInput(rawInput: string): string {
   const trimmed = (rawInput || '').trim();
@@ -236,6 +256,9 @@ export function parseReferralLookupInput(rawInput: string): string {
       if (parsed && typeof parsed.referral_id === 'string') {
         return parsed.referral_id.trim().toUpperCase();
       }
+      if (parsed && typeof parsed.patient_code === 'string') {
+        return parsed.patient_code.trim().toUpperCase();
+      }
     } catch {
       // Fall through to regex/plain parsing
     }
@@ -244,6 +267,11 @@ export function parseReferralLookupInput(rawInput: string): string {
   const idMatch = /\b(XL-[A-Z0-9]{3,8})\b/i.exec(trimmed);
   if (idMatch) {
     return idMatch[1].toUpperCase();
+  }
+
+  const synMatch = /\b(SYN-[A-Z0-9]{3,8})\b/i.exec(trimmed);
+  if (synMatch) {
+    return synMatch[1].toUpperCase();
   }
 
   return trimmed.toUpperCase();
@@ -379,7 +407,7 @@ export function createReferralRecord(
 }
 
 /**
- * Looks up a referral by short referral ID or QR payload.
+ * Looks up a referral by short referral ID ("XL-1001"), synthetic patient code ("SYN-001"), or QR payload.
  */
 export function lookupReferralById(
   referrals: Referral[],
@@ -395,7 +423,9 @@ export function lookupReferralById(
   }
 
   const match = referrals.find(
-    (r) => r.referral_id.toUpperCase() === normalizedId
+    (r) =>
+      r.referral_id.toUpperCase() === normalizedId ||
+      r.patient_code.toUpperCase() === normalizedId
   );
 
   if (!match) {
@@ -409,7 +439,313 @@ export function lookupReferralById(
   return {
     found: true,
     referral: match,
-    message: `Referral ${match.referral_id} loaded.`,
+    message: `Referral ${match.referral_id} (${match.patient_code}) loaded.`,
+  };
+}
+
+export interface QrValidationResult {
+  valid: boolean;
+  referralId?: string;
+  patientCode?: string;
+  isJsonPayload: boolean;
+  errorTitle?: string;
+  errorMessage?: string;
+}
+
+/**
+ * Validates that a scanned QR string belongs to the Xareloop referral format
+ * (either a XARELOOP_V1 JSON slip or a valid XL-XXXX referral code).
+ * Rejects unrelated URLs, random text, or malformed payloads.
+ */
+export function validateXareloopQrPayload(rawInput: string): QrValidationResult {
+  const trimmed = (rawInput || '').trim();
+  if (!trimmed) {
+    return {
+      valid: false,
+      isJsonPayload: false,
+      errorTitle: 'Empty QR Code',
+      errorMessage:
+        'No referral data was found in the QR code. Position a valid Xareloop referral QR code inside the frame.',
+    };
+  }
+
+  // Reject unrelated web URLs that do not contain a Xareloop ?ref=XL-XXXX parameter
+  if (/^https?:\/\//i.test(trimmed)) {
+    const urlRefMatch = /[?&]ref=(XL-[A-Z0-9]{3,8})\b/i.exec(trimmed);
+    if (urlRefMatch) {
+      return {
+        valid: true,
+        referralId: urlRefMatch[1].toUpperCase(),
+        isJsonPayload: false,
+      };
+    }
+    return {
+      valid: false,
+      isJsonPayload: false,
+      errorTitle: 'Unrelated QR Code',
+      errorMessage:
+        'This QR code points to an external website, not a Xareloop clinical referral slip. Please scan a Xareloop QR code (XL-XXXX).',
+    };
+  }
+
+  // Check JSON payload
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed) ||
+        (parsed.protocol && parsed.protocol !== 'XARELOOP_V1')
+      ) {
+        return {
+          valid: false,
+          isJsonPayload: true,
+          errorTitle: 'Non-Xareloop QR Format',
+          errorMessage:
+            'This QR code uses an unrecognized data format. Scan a valid Xareloop referral QR code.',
+        };
+      }
+
+      const refId =
+        typeof parsed.referral_id === 'string'
+          ? parsed.referral_id.trim().toUpperCase()
+          : '';
+      const patCode =
+        typeof parsed.patient_code === 'string'
+          ? parsed.patient_code.trim().toUpperCase()
+          : '';
+
+      if (!/^XL-[A-Z0-9]{3,8}$/.test(refId)) {
+        return {
+          valid: false,
+          isJsonPayload: true,
+          errorTitle: 'Invalid Referral ID in QR',
+          errorMessage:
+            'The scanned QR payload does not contain a valid Xareloop Referral ID (format XL-XXXX).',
+        };
+      }
+
+      if (patCode && !validateSyntheticPatientCode(patCode).valid) {
+        return {
+          valid: false,
+          isJsonPayload: true,
+          errorTitle: 'Invalid Synthetic Patient Code',
+          errorMessage:
+            'The scanned QR code contains an invalid patient code. Xareloop only accepts synthetic patient IDs (SYN-XXX).',
+        };
+      }
+
+      return {
+        valid: true,
+        referralId: refId,
+        patientCode: patCode || undefined,
+        isJsonPayload: true,
+      };
+    } catch {
+      return {
+        valid: false,
+        isJsonPayload: true,
+        errorTitle: 'Malformed QR Data',
+        errorMessage:
+          'The scanned QR code contains corrupted or unreadable data. Please try scanning again or enter the Referral ID manually.',
+      };
+    }
+  }
+
+  // Direct short referral ID (XL-XXXX) or synthetic patient ID (SYN-XXX)
+  if (/^XL-[A-Z0-9]{3,8}$/i.test(trimmed)) {
+    return {
+      valid: true,
+      referralId: trimmed.toUpperCase(),
+      isJsonPayload: false,
+    };
+  }
+
+  if (/^SYN-[A-Z0-9]{3,8}$/i.test(trimmed)) {
+    return {
+      valid: true,
+      patientCode: trimmed.toUpperCase(),
+      isJsonPayload: false,
+    };
+  }
+
+  return {
+    valid: false,
+    isJsonPayload: false,
+    errorTitle: 'Unrecognized QR Code',
+    errorMessage: `"${trimmed.slice(0, 36)}" is not a valid Xareloop referral code. Expected format: XL-1001.`,
+  };
+}
+
+/**
+ * Returns the valid next status actions for a referral based on its current status in the clinical pathway:
+ * Referred → Arrived → Seen → Treated → Follow-up / Back-referred
+ */
+export function getValidNextStatuses(
+  currentStatus: ReferralStatus
+): ReferralStatus[] {
+  switch (currentStatus) {
+    case 'Referred':
+      return ['Arrived'];
+    case 'Arrived':
+      return ['Seen'];
+    case 'Seen':
+      return ['Treated'];
+    case 'Treated':
+      return ['Follow-up', 'Back-referred'];
+    case 'Follow-up':
+      return ['Treated', 'Back-referred'];
+    case 'Back-referred':
+      return [];
+    default:
+      return [];
+  }
+}
+
+export type HapticPatternType = 'qr_scan' | 'status_tap';
+
+/**
+ * Returns the tactile vibration pattern (in ms) for mobile devices:
+ * - 'qr_scan': crisp double-pulse [45, 35, 65] when a QR code is decoded
+ * - 'status_tap': responsive single pulse 35ms when a status button is tapped
+ */
+export function getHapticVibrationPattern(
+  type: HapticPatternType
+): number | number[] {
+  return type === 'qr_scan' ? [45, 35, 65] : 35;
+}
+
+/**
+ * Triggers mobile haptic vibration feedback using the Web Vibration API (navigator.vibrate) when supported.
+ */
+export function triggerHapticFeedback(
+  type: HapticPatternType,
+  vibrateFn?: (pattern: number | number[]) => boolean
+): boolean {
+  const pattern = getHapticVibrationPattern(type);
+  try {
+    if (vibrateFn) {
+      return Boolean(vibrateFn(pattern));
+    }
+    if (
+      typeof navigator !== 'undefined' &&
+      typeof navigator.vibrate === 'function'
+    ) {
+      return Boolean(navigator.vibrate(pattern));
+    }
+  } catch {
+    // Ignore errors on browsers/devices without vibration hardware
+  }
+  return false;
+}
+
+/**
+ * Synchronizes patient & referral details from a scanned QR code payload into the active referral state.
+ * If the QR code contains a valid XARELOOP_V1 referral slip created offline on another device,
+ * it imports and syncs that patient's referral record so the receiving facility can immediately view and update it.
+ */
+export function syncScannedQrPatientDetail(
+  referrals: Referral[],
+  events: StatusEvent[],
+  rawQrValue: string,
+  isOffline: boolean = false
+): {
+  referral: Referral | null;
+  referrals: Referral[];
+  events: StatusEvent[];
+  importedNewRecord: boolean;
+} {
+  const existingLookup = lookupReferralById(referrals, rawQrValue);
+  if (existingLookup.found && existingLookup.referral) {
+    return {
+      referral: existingLookup.referral,
+      referrals,
+      events,
+      importedNewRecord: false,
+    };
+  }
+
+  const trimmed = (rawQrValue || '').trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (
+        parsed &&
+        typeof parsed.referral_id === 'string' &&
+        typeof parsed.patient_code === 'string'
+      ) {
+        const refId = parsed.referral_id.trim().toUpperCase();
+        const patCode = parsed.patient_code.trim().toUpperCase();
+        if (validateSyntheticPatientCode(patCode).valid && /^XL-[A-Z0-9]{3,8}$/.test(refId)) {
+          const nowIso =
+            typeof parsed.updated_at === 'string' && parsed.updated_at
+              ? parsed.updated_at
+              : new Date().toISOString();
+          const syncStatus: SyncStatus = isOffline ? 'Saved offline' : 'Synced';
+          const category =
+            typeof parsed.category === 'string' && parsed.category.trim()
+              ? parsed.category.trim()
+              : 'General Referral';
+          const priority: ReferralPriority =
+            parsed.priority === 'Emergency' ||
+            parsed.priority === 'Urgent' ||
+            parsed.priority === 'Routine'
+              ? parsed.priority
+              : 'Urgent';
+          const status: ReferralStatus = REFERRAL_STATUSES.includes(
+            parsed.status
+          )
+            ? parsed.status
+            : 'Referred';
+
+          const importedReferral: Referral = {
+            referral_id: refId,
+            patient_code: patCode,
+            referring_facility:
+              typeof parsed.from === 'string' && parsed.from.trim()
+                ? parsed.from.trim()
+                : 'PHC Demo North',
+            receiving_facility:
+              typeof parsed.to === 'string' && parsed.to.trim()
+                ? parsed.to.trim()
+                : 'District Hospital Demo',
+            primary_category: category,
+            referral_category: category,
+            priority,
+            created_at: nowIso,
+            current_status: status,
+            last_updated_at: nowIso,
+            sync_status: syncStatus,
+          };
+
+          const importedEvent: StatusEvent = {
+            event_id: `EVT-${refId}-QR-${Date.now()}`,
+            referral_id: refId,
+            facility_id: importedReferral.referring_facility,
+            status,
+            timestamp: nowIso,
+            sync_status: syncStatus,
+          };
+
+          return {
+            referral: importedReferral,
+            referrals: [importedReferral, ...referrals],
+            events: [...events, importedEvent],
+            importedNewRecord: true,
+          };
+        }
+      }
+    } catch {
+      // Not a JSON QR payload
+    }
+  }
+
+  return {
+    referral: null,
+    referrals,
+    events,
+    importedNewRecord: false,
   };
 }
 
